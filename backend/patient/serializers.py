@@ -1,0 +1,124 @@
+from rest_framework import serializers
+from django.contrib.auth.models import User
+from django.contrib.auth import authenticate
+from .models import PatientProfile
+
+
+class PatientSignupSerializer(serializers.ModelSerializer):
+    """Serializer for patient signup"""
+    password = serializers.CharField(write_only=True, min_length=8, style={'input_type': 'password'})
+    password_confirm = serializers.CharField(write_only=True, min_length=8, style={'input_type': 'password'})
+    email = serializers.EmailField(required=True)
+    username = serializers.CharField(required=True)
+    
+    class Meta:
+        model = User
+        fields = ('username', 'email', 'password', 'password_confirm')
+    
+    def validate(self, attrs):
+        if attrs['password'] != attrs['password_confirm']:
+            raise serializers.ValidationError({"password": "Passwords don't match."})
+        return attrs
+    
+    def validate_email(self, value):
+        if User.objects.filter(email=value).exists():
+            raise serializers.ValidationError("A user with this email already exists.")
+        return value
+    
+    def validate_username(self, value):
+        if User.objects.filter(username=value).exists():
+            raise serializers.ValidationError("A user with this username already exists.")
+        return value
+    
+    def create(self, validated_data):
+        validated_data.pop('password_confirm')
+        password = validated_data.pop('password')
+        # create_user automatically hashes the password
+        user = User.objects.create_user(password=password, **validated_data)
+        
+        # Create patient profile
+        PatientProfile.objects.create(user=user)
+        
+        return user
+
+
+class PatientLoginSerializer(serializers.Serializer):
+    """Serializer for patient login"""
+    username = serializers.CharField(required=True, allow_blank=False)
+    password = serializers.CharField(required=True, allow_blank=False, style={'input_type': 'password'}, write_only=True)
+    
+    def validate(self, attrs):
+        username = attrs.get('username')
+        password = attrs.get('password')
+        
+        if not username or not password:
+            raise serializers.ValidationError({
+                'non_field_errors': ["Must include both 'username' and 'password'."]
+            })
+        
+        user = authenticate(username=username, password=password)
+        if not user:
+            raise serializers.ValidationError({
+                'non_field_errors': ["Invalid username or password."]
+            })
+        
+        if not user.is_active:
+            raise serializers.ValidationError({
+                'non_field_errors': ["User account is disabled."]
+            })
+        
+        # Check if user has a patient profile
+        try:
+            patient_profile = user.patient_profile
+        except PatientProfile.DoesNotExist:
+            raise serializers.ValidationError({
+                'non_field_errors': ["This account is not associated with a patient profile."]
+            })
+        
+        attrs['user'] = user
+        return attrs
+
+
+class PatientProfileSerializer(serializers.ModelSerializer):
+    """Serializer for patient profile"""
+    username = serializers.CharField(source='user.username', read_only=True)
+    email = serializers.EmailField(source='user.email', read_only=True)
+    full_name = serializers.CharField(read_only=True)
+    
+    class Meta:
+        model = PatientProfile
+        fields = (
+            'id', 'username', 'email', 'first_name', 'last_name', 
+            'full_name', 'phone_number', 'date_of_birth', 'blood_group',
+            'emergency_contact_name', 'emergency_contact_phone', 'address',
+            'bio', 'profile_completed', 'created_at', 'updated_at'
+        )
+        read_only_fields = ('id', 'created_at', 'updated_at', 'profile_completed')
+
+
+class PatientProfileUpdateSerializer(serializers.ModelSerializer):
+    """Serializer for updating patient profile"""
+    
+    class Meta:
+        model = PatientProfile
+        fields = (
+            'first_name', 'last_name', 'phone_number', 'date_of_birth',
+            'blood_group', 'emergency_contact_name', 'emergency_contact_phone',
+            'address', 'bio'
+        )
+    
+    def update(self, instance, validated_data):
+        # Check if profile is being completed
+        required_fields = ['first_name', 'last_name', 'phone_number']
+        if all(validated_data.get(field) for field in required_fields):
+            instance.profile_completed = True
+        
+        return super().update(instance, validated_data)
+
+
+class UserSerializer(serializers.ModelSerializer):
+    """Basic user serializer"""
+    class Meta:
+        model = User
+        fields = ('id', 'username', 'email', 'first_name', 'last_name')
+
