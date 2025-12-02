@@ -1,7 +1,8 @@
 from rest_framework import serializers
 from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
-from .models import PatientProfile
+from .models import PatientProfile, PatientDoctorConnection
+from doctor.models import DoctorProfile
 
 
 class PatientSignupSerializer(serializers.ModelSerializer):
@@ -121,4 +122,150 @@ class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ('id', 'username', 'email', 'first_name', 'last_name')
+
+
+# ============= PROFILE SETUP STEP SERIALIZERS =============
+
+class ConsentSerializer(serializers.Serializer):
+    """Step 0 - Consent serializer"""
+    consent_given = serializers.BooleanField(required=True)
+    
+    def validate_consent_given(self, value):
+        if not value:
+            raise serializers.ValidationError("You must give consent to proceed.")
+        return value
+
+
+class Step1BasicInfoSerializer(serializers.ModelSerializer):
+    """Step 1 - Basic Identity & Contact (Required)"""
+    email = serializers.EmailField(source='user.email', read_only=True)
+    
+    class Meta:
+        model = PatientProfile
+        fields = (
+            'first_name', 'last_name', 'date_of_birth', 
+            'gender', 'phone_number', 'email'
+        )
+    
+    def validate(self, attrs):
+        # All fields in Step 1 are required
+        required_fields = ['first_name', 'last_name', 'date_of_birth', 'phone_number']
+        for field in required_fields:
+            if not attrs.get(field):
+                raise serializers.ValidationError({field: "This field is required for Step 1."})
+        return attrs
+
+
+class Step2HealthSnapshotSerializer(serializers.ModelSerializer):
+    """Step 2 - Health Snapshot (Required + short)"""
+    
+    class Meta:
+        model = PatientProfile
+        fields = (
+            'emergency_contact_name', 'emergency_contact_phone',
+            'known_allergies', 'chronic_conditions', 'current_medications',
+            'prescription_upload'
+        )
+    
+    def validate(self, attrs):
+        # Emergency contact is required
+        if not attrs.get('emergency_contact_name') or not attrs.get('emergency_contact_phone'):
+            raise serializers.ValidationError({
+                'emergency_contact': "Emergency contact name and phone are required."
+            })
+        return attrs
+
+
+class Step3PreferencesSerializer(serializers.ModelSerializer):
+    """Step 3 - Preferences & Quick Setup (Optional but recommended)"""
+    
+    class Meta:
+        model = PatientProfile
+        fields = (
+            'preferred_language', 'preferred_contact_method',
+            'share_data_for_research', 'note_for_doctors'
+        )
+
+
+class PatientProfileSetupSerializer(serializers.ModelSerializer):
+    """Complete profile setup serializer for all steps"""
+    username = serializers.CharField(source='user.username', read_only=True)
+    email = serializers.EmailField(source='user.email', read_only=True)
+    full_name = serializers.CharField(read_only=True)
+    is_profile_complete = serializers.BooleanField(read_only=True)
+    
+    class Meta:
+        model = PatientProfile
+        fields = (
+            'id', 'username', 'email', 'patient_id',
+            # Step 0
+            'consent_given', 'consent_timestamp',
+            # Step 1
+            'first_name', 'last_name', 'full_name', 'date_of_birth', 
+            'gender', 'phone_number',
+            # Step 2
+            'emergency_contact_name', 'emergency_contact_phone',
+            'known_allergies', 'chronic_conditions', 'current_medications',
+            'prescription_upload',
+            # Step 3
+            'preferred_language', 'preferred_contact_method',
+            'share_data_for_research', 'note_for_doctors',
+            # Status
+            'profile_completed', 'current_step', 'is_profile_complete',
+            'created_at', 'updated_at'
+        )
+        read_only_fields = (
+            'id', 'patient_id', 'consent_timestamp', 'profile_completed',
+            'created_at', 'updated_at'
+        )
+
+
+# ============= DOCTOR LINKING SERIALIZERS =============
+
+class DoctorSearchSerializer(serializers.ModelSerializer):
+    """Serializer for doctor search results"""
+    full_name = serializers.CharField(read_only=True)
+    is_verified = serializers.BooleanField(read_only=True)
+    
+    class Meta:
+        model = DoctorProfile
+        fields = (
+            'id', 'doctor_id', 'display_name', 'full_name',
+            'first_name', 'last_name', 'specialization',
+            'primary_clinic_hospital', 'city', 'country',
+            'consultation_mode', 'is_verified', 'profile_status'
+        )
+
+
+class PatientDoctorConnectionSerializer(serializers.ModelSerializer):
+    """Serializer for patient-doctor connections"""
+    patient_name = serializers.CharField(source='patient.full_name', read_only=True)
+    patient_id = serializers.CharField(source='patient.patient_id', read_only=True)
+    doctor_name = serializers.CharField(source='doctor.full_name', read_only=True)
+    doctor_id = serializers.CharField(source='doctor.doctor_id', read_only=True)
+    doctor_specialization = serializers.CharField(source='doctor.specialization', read_only=True)
+    
+    class Meta:
+        model = PatientDoctorConnection
+        fields = (
+            'id', 'patient_name', 'patient_id', 'doctor_name', 'doctor_id',
+            'doctor_specialization', 'status', 'initiated_by',
+            'patient_note', 'doctor_note', 'created_at', 'updated_at', 'accepted_at'
+        )
+        read_only_fields = ('id', 'initiated_by', 'created_at', 'updated_at', 'accepted_at')
+
+
+class CreateConnectionRequestSerializer(serializers.Serializer):
+    """Serializer for creating a connection request"""
+    doctor_id = serializers.CharField(required=False, allow_blank=True)
+    doctor_profile_id = serializers.IntegerField(required=False)
+    patient_note = serializers.CharField(required=False, allow_blank=True, max_length=500)
+    
+    def validate(self, attrs):
+        # Must provide either doctor_id or doctor_profile_id
+        if not attrs.get('doctor_id') and not attrs.get('doctor_profile_id'):
+            raise serializers.ValidationError({
+                'doctor': "Please provide either doctor_id or doctor_profile_id."
+            })
+        return attrs
 

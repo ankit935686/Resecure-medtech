@@ -49,7 +49,7 @@ export default function SignupPatient() {
       const result = await signup('patient', formData);
 
       if (result.success) {
-        navigate('/patient/profile');
+        navigate('/patient/profile-setup');
       } else {
         setError(result.error || 'Signup failed');
       }
@@ -68,7 +68,7 @@ export default function SignupPatient() {
       const result = await googleAuth('patient', credential);
 
       if (result.success) {
-        navigate('/patient/profile');
+        navigate('/patient/profile-setup');
       } else {
         setError(result.error || 'Google authentication failed');
       }

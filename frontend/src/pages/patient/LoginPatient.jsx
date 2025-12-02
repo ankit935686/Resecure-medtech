@@ -35,7 +35,8 @@ export default function LoginPatient() {
       const result = await login('patient', formData.username, formData.password);
 
       if (result.success) {
-        navigate('/patient/profile');
+        // Check if profile is complete
+        navigate('/patient/dashboard');
       } else {
         setError(result.error || 'Login failed');
       }
@@ -54,7 +55,7 @@ export default function LoginPatient() {
       const result = await googleAuth('patient', credential);
 
       if (result.success) {
-        navigate('/patient/profile');
+        navigate('/patient/dashboard');
       } else {
         setError(result.error || 'Google authentication failed');
       }

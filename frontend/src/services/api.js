@@ -236,6 +236,78 @@ const api = {
       const response = await apiClient.get('/doctor/profile/verification-status/');
       return response.data;
     },
+
+    // Connection Management
+    getConnectionRequests: async () => {
+      // GET /api/doctor/connections/requests/
+      const response = await apiClient.get('/doctor/connections/requests/');
+      return response.data;
+    },
+
+    getConnectedPatients: async () => {
+      // GET /api/doctor/connections/patients/
+      const response = await apiClient.get('/doctor/connections/patients/');
+      return response.data;
+    },
+
+    acceptConnection: async (connectionId, note = '') => {
+      // POST /api/doctor/connections/<id>/accept/
+      await api.core.getCsrfToken();
+      const response = await apiClient.post(`/doctor/connections/${connectionId}/accept/`, { note });
+      return response.data;
+    },
+
+    rejectConnection: async (connectionId, note = '') => {
+      // POST /api/doctor/connections/<id>/reject/
+      await api.core.getCsrfToken();
+      const response = await apiClient.post(`/doctor/connections/${connectionId}/reject/`, { note });
+      return response.data;
+    },
+
+    removePatientConnection: async (connectionId) => {
+      // POST /api/doctor/connections/<id>/remove/
+      await api.core.getCsrfToken();
+      const response = await apiClient.post(`/doctor/connections/${connectionId}/remove/`);
+      return response.data;
+    },
+
+    // QR Code Generation
+    generateQRCode: async (data = {}) => {
+      // POST /api/doctor/qr/generate/
+      await api.core.getCsrfToken();
+      const response = await apiClient.post('/doctor/qr/generate/', data);
+      return response.data;
+    },
+
+    getMyQRTokens: async () => {
+      // GET /api/doctor/qr/tokens/
+      const response = await apiClient.get('/doctor/qr/tokens/');
+      return response.data;
+    },
+
+    deleteQRToken: async (token) => {
+      // DELETE /api/doctor/qr/<token>/delete/
+      await api.core.getCsrfToken();
+      const response = await apiClient.delete(`/doctor/qr/${token}/delete/`);
+      return response.data;
+    },
+
+    // Patient Search
+    searchPatients: async (params = {}) => {
+      // GET /api/doctor/patients/search/
+      const response = await apiClient.get('/doctor/patients/search/', { params });
+      return response.data;
+    },
+
+    connectWithPatient: async (patientId, note = '') => {
+      // POST /api/doctor/patients/connect/
+      await api.core.getCsrfToken();
+      const response = await apiClient.post('/doctor/patients/connect/', {
+        patient_id: patientId,
+        note: note
+      });
+      return response.data;
+    },
   },
 
   // ==================== ADMIN API ====================
@@ -322,7 +394,7 @@ const api = {
 
     googleAuth: async (credential) => {
       // POST /api/patient/google-auth/
-      // Sends: { credential } (Google ID token)
+      // Sends: { credential} (Google ID token)
       // Returns: { user, profile, redirect_to }
       await api.core.getCsrfToken(); // Get CSRF token first
       const response = await apiClient.post('/patient/google-auth/', {
@@ -350,6 +422,103 @@ const api = {
 
     getCurrentUser: async () => {
       const response = await apiClient.get('/patient/me/');
+      return response.data;
+    },
+
+    // Profile Setup Wizard
+    submitConsent: async (data) => {
+      await api.core.getCsrfToken();
+      const response = await apiClient.post('/patient/setup/consent/', data);
+      return response.data;
+    },
+
+    submitStep1: async (data) => {
+      await api.core.getCsrfToken();
+      const response = await apiClient.post('/patient/setup/step1/', data);
+      return response.data;
+    },
+
+    submitStep2: async (formData) => {
+      await api.core.getCsrfToken();
+      const response = await apiClient.post('/patient/setup/step2/', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+      return response.data;
+    },
+
+    submitStep3: async (data) => {
+      await api.core.getCsrfToken();
+      const response = await apiClient.post('/patient/setup/step3/', data);
+      return response.data;
+    },
+
+    finishProfileSetup: async () => {
+      await api.core.getCsrfToken();
+      const response = await apiClient.post('/patient/setup/finish/', {});
+      return response.data;
+    },
+
+    getProfileSetupStatus: async () => {
+      const response = await apiClient.get('/patient/setup/status/');
+      return response.data;
+    },
+
+    // Doctor Linking
+    searchDoctors: async (params) => {
+      const queryString = new URLSearchParams(params).toString();
+      const response = await apiClient.get(`/patient/doctors/search/?${queryString}`);
+      return response.data;
+    },
+
+    createConnection: async (data) => {
+      await api.core.getCsrfToken();
+      const response = await apiClient.post('/patient/connections/create/', data);
+      return response.data;
+    },
+
+    getMyConnections: async () => {
+      const response = await apiClient.get('/patient/connections/');
+      return response.data;
+    },
+
+    getConnectedDoctors: async () => {
+      const response = await apiClient.get('/patient/connections/doctors/');
+      return response.data;
+    },
+
+    removeConnection: async (connectionId) => {
+      await api.core.getCsrfToken();
+      const response = await apiClient.delete(`/patient/connections/${connectionId}/remove/`);
+      return response.data;
+    },
+
+    acceptConnection: async (connectionId, note = '') => {
+      // POST /api/patient/connections/<id>/accept/
+      await api.core.getCsrfToken();
+      const response = await apiClient.post(`/patient/connections/${connectionId}/accept/`, { note });
+      return response.data;
+    },
+
+    rejectConnection: async (connectionId, note = '') => {
+      // POST /api/patient/connections/<id>/reject/
+      await api.core.getCsrfToken();
+      const response = await apiClient.post(`/patient/connections/${connectionId}/reject/`, { note });
+      return response.data;
+    },
+
+    // QR Code Scanning
+    validateQRToken: async (token) => {
+      // GET /api/patient/qr/validate/<token>/
+      const response = await apiClient.get(`/patient/qr/validate/${token}/`);
+      return response.data;
+    },
+
+    scanQRCode: async (token) => {
+      // POST /api/patient/qr/scan/<token>/
+      await api.core.getCsrfToken();
+      const response = await apiClient.post(`/patient/qr/scan/${token}/`);
       return response.data;
     },
   },

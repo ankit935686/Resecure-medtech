@@ -23,5 +23,21 @@ urlpatterns = [
     path('profile/submit/', views.profile_submit_verification, name='profile-submit'),
     path('profile/save-draft/', views.profile_save_draft, name='profile-save-draft'),
     path('profile/verification-status/', views.profile_verification_status, name='profile-verification-status'),
+    
+    # Patient Connection Management endpoints
+    path('connections/requests/', views.get_connection_requests, name='connection-requests'),
+    path('connections/patients/', views.get_connected_patients, name='connected-patients'),
+    path('connections/<int:connection_id>/accept/', views.accept_connection_request, name='accept-connection'),
+    path('connections/<int:connection_id>/reject/', views.reject_connection_request, name='reject-connection'),
+    path('connections/<int:connection_id>/remove/', views.remove_patient_connection, name='remove-connection'),
+    
+    # QR Code Generation endpoints
+    path('qr/generate/', views.generate_qr_token, name='generate-qr'),
+    path('qr/tokens/', views.get_my_qr_tokens, name='my-qr-tokens'),
+    path('qr/<str:token_str>/delete/', views.delete_qr_token, name='delete-qr-token'),
+    
+    # Patient Search endpoints
+    path('patients/search/', views.search_patients, name='search-patients'),
+    path('patients/connect/', views.create_patient_connection, name='create-patient-connection'),
 ]
 

@@ -38,6 +38,12 @@ import DoctorVerification from './pages/admin/DoctorVerification';
 // Patient Pages
 import LoginPatient from './pages/patient/LoginPatient';
 import SignupPatient from './pages/patient/SignupPatient';
+import PatientProfileSetup from './pages/patient/PatientProfileSetup';
+import PatientDashboard from './pages/patient/PatientDashboard';
+import ScanQRCode from './pages/patient/ScanQRCode';
+
+// Doctor Dashboard
+import DoctorDashboard from './pages/doctor/DoctorDashboard';
 
 function App() {
   return (
@@ -64,7 +70,7 @@ function App() {
             path="/doctor/dashboard"
             element={
               <ProtectedRoute allowedRoles={['doctor']}>
-                <Dashboard />
+                <DoctorDashboard />
               </ProtectedRoute>
             }
           />
@@ -121,10 +127,36 @@ function App() {
 
           {/* Protected Routes - Patient */}
           <Route
+            path="/patient/dashboard"
+            element={
+              <ProtectedRoute allowedRoles={['patient']}>
+                <PatientDashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
             path="/patient/profile"
             element={
               <ProtectedRoute allowedRoles={['patient']}>
                 <Profile />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/patient/profile-setup"
+            element={
+              <ProtectedRoute allowedRoles={['patient']}>
+                <PatientProfileSetup />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Public Route - Patient QR Scan (requires auth but anyone with link can access) */}
+          <Route
+            path="/patient/scan-qr/:token"
+            element={
+              <ProtectedRoute allowedRoles={['patient']}>
+                <ScanQRCode />
               </ProtectedRoute>
             }
           />
