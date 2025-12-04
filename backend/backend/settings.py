@@ -25,12 +25,19 @@ load_dotenv(os.path.join(BASE_DIR, '.env'))
 # See https://docs.djangoproject.com/en/5.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-hynsn#s(sj_jtvq)prcb)%g3iet^f7*+@o+(3jj7lzfxf3scxz' 
+# In production (Render), set SECRET_KEY as an environment variable.
+SECRET_KEY = os.getenv(
+    'SECRET_KEY',
+    'dev-insecure-secret-key-change-me'  # Fallback for local development only
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = []
+# Comma‑separated list of allowed hosts, e.g.:
+# ALLOWED_HOSTS=localhost,127.0.0.1,my-backend.onrender.com
+ALLOWED_HOSTS_ENV = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1')
+ALLOWED_HOSTS = [h.strip() for h in ALLOWED_HOSTS_ENV.split(',') if h.strip()]
 
 
 # Application definition
@@ -161,8 +168,8 @@ REST_FRAMEWORK = {
     ],
 }
 
-# CORS Configuration
-CORS_ALLOWED_ORIGINS = [
+# CORS / CSRF configuration
+_default_origins = [
     "http://localhost:5173",  # Vite default port
     "http://localhost:5174",  # Vite alternate port
     "http://localhost:3000",
@@ -170,6 +177,16 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:5174",
     "http://127.0.0.1:3000",
 ]
+
+# Optional extra origins (for Vercel, etc.), comma‑separated, e.g.:
+# FRONTEND_ORIGINS=https://your-app.vercel.app
+EXTRA_ORIGINS_ENV = os.getenv('FRONTEND_ORIGINS', '')
+if EXTRA_ORIGINS_ENV:
+    _default_origins += [
+        o.strip() for o in EXTRA_ORIGINS_ENV.split(',') if o.strip()
+    ]
+
+CORS_ALLOWED_ORIGINS = _default_origins
 
 CORS_ALLOW_CREDENTIALS = True
 CORS_EXPOSE_HEADERS = ['Set-Cookie']  # Expose Set-Cookie header
@@ -188,32 +205,34 @@ CORS_ALLOW_HEADERS = [
 ]
 
 # CSRF settings for API
-CSRF_TRUSTED_ORIGINS = [
-    "http://localhost:5173",
-    "http://localhost:5174",
-    "http://localhost:3000",
-    "http://127.0.0.1:5173",
-    "http://127.0.0.1:5174",
-    "http://127.0.0.1:3000",
-]
+CSRF_TRUSTED_ORIGINS = _default_origins
 
-# CSRF cookie settings
-CSRF_COOKIE_NAME = 'csrftoken'
-CSRF_COOKIE_HTTPONLY = False  # Allow JavaScript to read CSRF token
-CSRF_COOKIE_SAMESITE = 'Lax'  # Protect against CSRF attacks
-CSRF_COOKIE_SECURE = False  # Set to True in production with HTTPS
-CSRF_USE_SESSIONS = False  # Use cookie-based CSRF tokens
-
-# Session settings
+# Cookie / session settings
 SESSION_COOKIE_NAME = 'sessionid'  # Explicit session cookie name
 SESSION_COOKIE_HTTPONLY = True
-SESSION_COOKIE_SAMESITE = None  # Allow cross-site cookies in development
-SESSION_COOKIE_SECURE = False  # Set to True in production with HTTPS
 SESSION_COOKIE_AGE = 1209600  # 2 weeks in seconds
 SESSION_COOKIE_DOMAIN = None  # Allow for both localhost and 127.0.0.1
-SESSION_SAVE_EVERY_REQUEST = True  # Ensure session is saved on every request
 CSRF_COOKIE_DOMAIN = None  # Allow for both localhost and 127.0.0.1
-CSRF_COOKIE_SAMESITE = None  # Allow cross-site cookies in development
+
+if DEBUG:
+    # Development‑friendly cookie settings
+    CSRF_COOKIE_NAME = 'csrftoken'
+    CSRF_COOKIE_HTTPONLY = False  # Allow JavaScript to read CSRF token
+    CSRF_COOKIE_SAMESITE = None
+    CSRF_COOKIE_SECURE = False
+    SESSION_COOKIE_SAMESITE = None
+    SESSION_COOKIE_SECURE = False
+else:
+    # Production‑friendly cookie settings (HTTPS, cross‑site)
+    CSRF_COOKIE_NAME = 'csrftoken'
+    CSRF_COOKIE_HTTPONLY = False
+    CSRF_COOKIE_SAMESITE = 'None'
+    CSRF_COOKIE_SECURE = True
+    SESSION_COOKIE_SAMESITE = 'None'
+    SESSION_COOKIE_SECURE = True
+
+CSRF_USE_SESSIONS = False  # Use cookie-based CSRF tokens
+SESSION_SAVE_EVERY_REQUEST = True  # Ensure session is saved on every request
 
 # Django Allauth Configuration
 SITE_ID = 1

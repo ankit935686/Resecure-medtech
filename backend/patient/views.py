@@ -6,7 +6,12 @@ from django.contrib.auth.models import User
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.db.models import Q
 from datetime import datetime
-from .models import PatientProfile, PatientDoctorConnection, ConnectionToken
+from .models import (
+    PatientProfile,
+    PatientDoctorConnection,
+    ConnectionToken,
+    DoctorPatientWorkspace,
+)
 from doctor.models import DoctorProfile
 from django.utils import timezone
 from .serializers import (
@@ -24,7 +29,10 @@ from .serializers import (
     # Doctor Linking Serializers
     DoctorSearchSerializer,
     PatientDoctorConnectionSerializer,
-    CreateConnectionRequestSerializer
+    CreateConnectionRequestSerializer,
+    # Workspace Serializers
+    DoctorPatientWorkspaceSummarySerializer,
+    DoctorPatientWorkspaceDetailSerializer,
 )
 
 
@@ -643,6 +651,67 @@ def reject_connection_request(request, connection_id):
         'message': 'Connection rejected',
         'connection': PatientDoctorConnectionSerializer(connection).data
     }, status=status.HTTP_200_OK)
+
+
+# ============= DOCTOR WORKSPACES (PATIENT VIEW) =============
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def list_patient_workspaces(request):
+    """List all doctor-specific workspaces for the patient"""
+    patient_profile = request.user.patient_profile
+
+    connections = PatientDoctorConnection.objects.filter(
+        patient=patient_profile,
+        status='accepted'
+    ).select_related('doctor', 'patient')
+
+    if not connections.exists():
+        return Response({'count': 0, 'workspaces': []}, status=status.HTTP_200_OK)
+
+    connection_ids = []
+    for connection in connections:
+        workspace = DoctorPatientWorkspace.ensure_for_connection(connection)
+        workspace.sync_metadata()
+        connection_ids.append(connection.id)
+
+    workspaces = DoctorPatientWorkspace.objects.filter(
+        connection_id__in=connection_ids
+    ).select_related('doctor', 'patient', 'connection').prefetch_related('timeline_entries')
+
+    serializer = DoctorPatientWorkspaceSummarySerializer(workspaces, many=True)
+    return Response({'count': len(serializer.data), 'workspaces': serializer.data}, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def get_patient_workspace_detail(request, connection_id):
+    """Detailed workspace view for a specific doctor"""
+    patient_profile = request.user.patient_profile
+
+    try:
+        connection = PatientDoctorConnection.objects.select_related('doctor', 'patient').get(
+            id=connection_id,
+            patient=patient_profile,
+            status='accepted'
+        )
+    except PatientDoctorConnection.DoesNotExist:
+        return Response({'error': 'Workspace not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    workspace = DoctorPatientWorkspace.ensure_for_connection(connection)
+    workspace.sync_metadata()
+
+    limit = request.GET.get('limit')
+    try:
+        limit = int(limit) if limit else None
+    except ValueError:
+        limit = None
+
+    serializer = DoctorPatientWorkspaceDetailSerializer(
+        workspace,
+        context={'entries_limit': limit}
+    )
+    return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 # ============= QR CODE SCANNING =============

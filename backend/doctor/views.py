@@ -19,7 +19,19 @@ from .serializers import (
     DoctorProfileSubmitSerializer,
     UserSerializer
 )
-from patient.models import PatientDoctorConnection, ConnectionToken
+from patient.models import (
+    PatientDoctorConnection,
+    ConnectionToken,
+    DoctorPatientWorkspace,
+    DoctorPatientTimelineEntry,
+)
+from patient.serializers import (
+    DoctorPatientWorkspaceSummarySerializer,
+    DoctorPatientWorkspaceDetailSerializer,
+    DoctorPatientWorkspaceUpdateSerializer,
+    DoctorPatientTimelineEntrySerializer,
+    DoctorPatientTimelineEntryCreateSerializer,
+)
 from datetime import timedelta
 import qrcode
 from io import BytesIO
@@ -613,6 +625,121 @@ def remove_patient_connection(request, connection_id):
     }, status=status.HTTP_200_OK)
 
 
+# ==================== PATIENT WORKSPACES (DOCTOR VIEW) ====================
+
+def _get_workspace_for_doctor(doctor_profile, connection_id):
+    """Helper to fetch workspace for a doctor/connection combo"""
+    try:
+        connection = PatientDoctorConnection.objects.select_related('patient', 'doctor').get(
+            id=connection_id,
+            doctor=doctor_profile,
+            status='accepted'
+        )
+    except PatientDoctorConnection.DoesNotExist:
+        return None
+
+    workspace = DoctorPatientWorkspace.ensure_for_connection(connection)
+    workspace.sync_metadata()
+    return workspace
+
+
+def _parse_entries_limit(request):
+    limit_param = request.GET.get('limit')
+    try:
+        return int(limit_param) if limit_param else None
+    except (TypeError, ValueError):
+        return None
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def doctor_list_workspaces(request):
+    """List all active care workspaces for the doctor"""
+    try:
+        doctor_profile = request.user.doctor_profile
+    except DoctorProfile.DoesNotExist:
+        return Response({'error': 'Doctor profile not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    connections = PatientDoctorConnection.objects.filter(
+        doctor=doctor_profile,
+        status='accepted'
+    ).select_related('patient', 'doctor')
+
+    if not connections.exists():
+        return Response({'count': 0, 'workspaces': []}, status=status.HTTP_200_OK)
+
+    connection_ids = []
+    for connection in connections:
+        DoctorPatientWorkspace.ensure_for_connection(connection).sync_metadata()
+        connection_ids.append(connection.id)
+
+    workspaces = DoctorPatientWorkspace.objects.filter(
+        connection_id__in=connection_ids
+    ).select_related('patient', 'doctor', 'connection').prefetch_related('timeline_entries')
+
+    serializer = DoctorPatientWorkspaceSummarySerializer(workspaces, many=True)
+    return Response({'count': len(serializer.data), 'workspaces': serializer.data}, status=status.HTTP_200_OK)
+
+
+@api_view(['GET', 'PATCH'])
+@permission_classes([permissions.IsAuthenticated])
+def doctor_workspace_detail(request, connection_id):
+    """Get or update a specific workspace"""
+    try:
+        doctor_profile = request.user.doctor_profile
+    except DoctorProfile.DoesNotExist:
+        return Response({'error': 'Doctor profile not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    workspace = _get_workspace_for_doctor(doctor_profile, connection_id)
+    if not workspace:
+        return Response({'error': 'Workspace not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == 'PATCH':
+        serializer = DoctorPatientWorkspaceUpdateSerializer(workspace, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            detail = DoctorPatientWorkspaceDetailSerializer(
+                workspace,
+                context={'entries_limit': _parse_entries_limit(request), 'include_internal_notes': True}
+            )
+            return Response({
+                'message': 'Workspace updated successfully',
+                'workspace': detail.data
+            }, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    serializer = DoctorPatientWorkspaceDetailSerializer(
+        workspace,
+        context={'entries_limit': _parse_entries_limit(request), 'include_internal_notes': True}
+    )
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def doctor_workspace_add_entry(request, connection_id):
+    """Add a treatment/update note to the workspace timeline"""
+    try:
+        doctor_profile = request.user.doctor_profile
+    except DoctorProfile.DoesNotExist:
+        return Response({'error': 'Doctor profile not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    workspace = _get_workspace_for_doctor(doctor_profile, connection_id)
+    if not workspace:
+        return Response({'error': 'Workspace not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    serializer = DoctorPatientTimelineEntryCreateSerializer(data=request.data)
+    if serializer.is_valid():
+        entry = serializer.save(workspace=workspace, created_by='doctor')
+        entry_data = DoctorPatientTimelineEntrySerializer(entry).data
+        return Response({
+            'message': 'Update shared with patient',
+            'entry': entry_data
+        }, status=status.HTTP_201_CREATED)
+
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
 # ==================== QR CODE GENERATION & MANAGEMENT ====================
 
 @api_view(['POST'])
@@ -863,3 +990,146 @@ def create_patient_connection(request):
         'patient_name': patient_profile.full_name,
         'status': connection.status
     }, status=status.HTTP_201_CREATED)
+
+
+# ==================== PATIENT PROFILE DETAILS FOR DOCTORS ====================
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def get_patient_profile_detail(request, patient_id):
+    """Get comprehensive patient profile details for a connected patient"""
+    try:
+        doctor_profile = request.user.doctor_profile
+    except DoctorProfile.DoesNotExist:
+        return Response({'error': 'Doctor profile not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    # Get patient profile
+    try:
+        from patient.models import PatientProfile
+        patient_profile = PatientProfile.objects.get(id=patient_id)
+    except PatientProfile.DoesNotExist:
+        return Response({'error': 'Patient not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    # Check if doctor is connected to this patient
+    try:
+        connection = PatientDoctorConnection.objects.get(
+            patient=patient_profile,
+            doctor=doctor_profile,
+            status='accepted'
+        )
+    except PatientDoctorConnection.DoesNotExist:
+        return Response({
+            'error': 'You are not connected to this patient'
+        }, status=status.HTTP_403_FORBIDDEN)
+    
+    # Serialize patient profile with context
+    from patient.serializers import PatientProfileForDoctorSerializer
+    serializer = PatientProfileForDoctorSerializer(
+        patient_profile,
+        context={'doctor_profile': doctor_profile}
+    )
+    
+    return Response({
+        'patient': serializer.data,
+        'connection': {
+            'id': connection.id,
+            'created_at': connection.created_at,
+            'connection_type': connection.connection_type,
+            'patient_note': connection.patient_note,
+        }
+    }, status=status.HTTP_200_OK)
+
+
+# ==================== DOCTOR DASHBOARD SUMMARY ====================
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def doctor_dashboard_summary(request):
+    """Get comprehensive dashboard summary for doctor"""
+    try:
+        doctor_profile = request.user.doctor_profile
+    except DoctorProfile.DoesNotExist:
+        return Response({'error': 'Doctor profile not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    # Get all connections
+    connections = PatientDoctorConnection.objects.filter(doctor=doctor_profile)
+    
+    # Count by status
+    total_patients = connections.filter(status='accepted').count()
+    pending_requests = connections.filter(status='pending').count()
+    
+    # Get active workspaces
+    active_workspaces = DoctorPatientWorkspace.objects.filter(
+        doctor=doctor_profile,
+        status='active'
+    ).select_related('patient', 'connection').count()
+    
+    # Get recent timeline entries (last 7 days)
+    from datetime import timedelta
+    from django.utils import timezone
+    seven_days_ago = timezone.now() - timedelta(days=7)
+    
+    recent_updates = DoctorPatientTimelineEntry.objects.filter(
+        workspace__doctor=doctor_profile,
+        created_at__gte=seven_days_ago
+    ).count()
+    
+    # Get upcoming reviews (next 30 days)
+    thirty_days_later = timezone.now() + timedelta(days=30)
+    upcoming_reviews = DoctorPatientWorkspace.objects.filter(
+        doctor=doctor_profile,
+        next_review_date__isnull=False,
+        next_review_date__lte=thirty_days_later.date(),
+        next_review_date__gte=timezone.now().date()
+    ).select_related('patient').order_by('next_review_date')
+    
+    upcoming_reviews_data = []
+    for workspace in upcoming_reviews[:5]:  # Limit to 5
+        upcoming_reviews_data.append({
+            'patient_name': workspace.patient.full_name,
+            'patient_id': workspace.patient.patient_id,
+            'review_date': workspace.next_review_date,
+            'workspace_id': workspace.id,
+            'connection_id': workspace.connection_id,
+        })
+    
+    # Get critical/important updates
+    critical_entries = DoctorPatientTimelineEntry.objects.filter(
+        workspace__doctor=doctor_profile,
+        is_critical=True,
+        created_at__gte=seven_days_ago
+    ).select_related('workspace__patient').order_by('-created_at')[:5]
+    
+    critical_entries_data = []
+    for entry in critical_entries:
+        critical_entries_data.append({
+            'patient_name': entry.workspace.patient.full_name,
+            'patient_id': entry.workspace.patient.patient_id,
+            'title': entry.title,
+            'summary': entry.summary,
+            'entry_type': entry.entry_type,
+            'created_at': entry.created_at,
+            'workspace_id': entry.workspace.id,
+        })
+    
+    # Get QR tokens statistics
+    qr_tokens = ConnectionToken.objects.filter(doctor=doctor_profile)
+    active_qr_tokens = qr_tokens.filter(is_valid=True).count()
+    
+    return Response({
+        'summary': {
+            'total_patients': total_patients,
+            'pending_requests': pending_requests,
+            'active_workspaces': active_workspaces,
+            'recent_updates_count': recent_updates,
+            'active_qr_tokens': active_qr_tokens,
+        },
+        'upcoming_reviews': upcoming_reviews_data,
+        'critical_updates': critical_entries_data,
+        'doctor_info': {
+            'name': doctor_profile.display_name or doctor_profile.full_name,
+            'doctor_id': doctor_profile.doctor_id,
+            'specialization': doctor_profile.specialization,
+            'verification_status': doctor_profile.profile_status,
+        }
+    }, status=status.HTTP_200_OK)

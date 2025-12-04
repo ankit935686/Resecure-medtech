@@ -41,9 +41,12 @@ import SignupPatient from './pages/patient/SignupPatient';
 import PatientProfileSetup from './pages/patient/PatientProfileSetup';
 import PatientDashboard from './pages/patient/PatientDashboard';
 import ScanQRCode from './pages/patient/ScanQRCode';
+import PatientWorkspace from './pages/patient/PatientWorkspace';
 
 // Doctor Dashboard
 import DoctorDashboard from './pages/doctor/DoctorDashboard';
+import DoctorPatientWorkspaces from './pages/doctor/DoctorPatientWorkspaces';
+import DoctorWorkspaceDetail from './pages/doctor/DoctorWorkspaceDetail';
 
 function App() {
   return (
@@ -98,6 +101,22 @@ function App() {
               </ProtectedRoute>
             }
           />
+          <Route
+            path="/doctor/workspaces"
+            element={
+              <ProtectedRoute allowedRoles={['doctor']}>
+                <DoctorPatientWorkspaces />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/doctor/workspaces/:connectionId"
+            element={
+              <ProtectedRoute allowedRoles={['doctor']}>
+                <DoctorWorkspaceDetail />
+              </ProtectedRoute>
+            }
+          />
 
           {/* Protected Routes - Admin */}
           <Route
@@ -147,6 +166,14 @@ function App() {
             element={
               <ProtectedRoute allowedRoles={['patient']}>
                 <PatientProfileSetup />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/patient/workspaces/:connectionId"
+            element={
+              <ProtectedRoute allowedRoles={['patient']}>
+                <PatientWorkspace />
               </ProtectedRoute>
             }
           />

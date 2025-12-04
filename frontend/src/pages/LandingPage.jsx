@@ -136,7 +136,7 @@ export default function LandingPage() {
               </div>
               <div>
                 <span className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-cyan-600 bg-clip-text text-transparent">
-                  Recure360
+                  MeditStack360
                 </span>
                 <p className="text-xs text-gray-500">Healthcare Excellence</p>
               </div>

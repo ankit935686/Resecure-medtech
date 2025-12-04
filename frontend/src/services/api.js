@@ -85,10 +85,19 @@ apiClient.interceptors.response.use(
   (error) => {
     // If we get a 401 (unauthorized), user is not authenticated
     if (error.response?.status === 401) {
-      // Clear session data and redirect to login
+      // Clear session data and redirect to appropriate login page
+      const userRole = localStorage.getItem('userRole');
       localStorage.removeItem('user');
       localStorage.removeItem('userRole');
-      window.location.href = '/doctor/login';
+      
+      // Redirect based on user role
+      if (userRole === 'patient') {
+        window.location.href = '/patient/login';
+      } else if (userRole === 'admin') {
+        window.location.href = '/admin/login';
+      } else {
+        window.location.href = '/doctor/login';
+      }
     }
     
     // Log error details for debugging
@@ -308,6 +317,47 @@ const api = {
       });
       return response.data;
     },
+
+    // Doctor-Patient Workspaces
+    getCareWorkspaces: async () => {
+      // GET /api/doctor/workspaces/
+      const response = await apiClient.get('/doctor/workspaces/');
+      return response.data;
+    },
+
+    getCareWorkspaceDetail: async (connectionId, params = {}) => {
+      // GET /api/doctor/workspaces/<id>/
+      const response = await apiClient.get(`/doctor/workspaces/${connectionId}/`, { params });
+      return response.data;
+    },
+
+    updateCareWorkspace: async (connectionId, data) => {
+      // PATCH /api/doctor/workspaces/<id>/
+      await api.core.getCsrfToken();
+      const response = await apiClient.patch(`/doctor/workspaces/${connectionId}/`, data);
+      return response.data;
+    },
+
+    addWorkspaceEntry: async (connectionId, data) => {
+      // POST /api/doctor/workspaces/<id>/entries/
+      await api.core.getCsrfToken();
+      const response = await apiClient.post(`/doctor/workspaces/${connectionId}/entries/`, data);
+      return response.data;
+    },
+
+    // Patient Profile Details
+    getPatientProfile: async (patientId) => {
+      // GET /api/doctor/patients/<id>/profile/
+      const response = await apiClient.get(`/doctor/patients/${patientId}/profile/`);
+      return response.data;
+    },
+
+    // Dashboard Summary
+    getDashboardSummary: async () => {
+      // GET /api/doctor/dashboard/summary/
+      const response = await apiClient.get('/doctor/dashboard/summary/');
+      return response.data;
+    },
   },
 
   // ==================== ADMIN API ====================
@@ -505,6 +555,19 @@ const api = {
       // POST /api/patient/connections/<id>/reject/
       await api.core.getCsrfToken();
       const response = await apiClient.post(`/patient/connections/${connectionId}/reject/`, { note });
+      return response.data;
+    },
+
+    // Doctor-Patient Workspaces
+    getCareWorkspaces: async () => {
+      // GET /api/patient/workspaces/
+      const response = await apiClient.get('/patient/workspaces/');
+      return response.data;
+    },
+
+    getCareWorkspaceDetail: async (connectionId, params = {}) => {
+      // GET /api/patient/workspaces/<id>/
+      const response = await apiClient.get(`/patient/workspaces/${connectionId}/`, { params });
       return response.data;
     },
 

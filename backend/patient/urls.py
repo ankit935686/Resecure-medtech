@@ -31,6 +31,10 @@ urlpatterns = [
     path('connections/<int:connection_id>/remove/', views.remove_connection, name='remove-connection'),
     path('connections/<int:connection_id>/accept/', views.accept_connection_request, name='accept-connection'),
     path('connections/<int:connection_id>/reject/', views.reject_connection_request, name='reject-connection'),
+
+    # Patient-Doctor workspace endpoints
+    path('workspaces/', views.list_patient_workspaces, name='patient-workspaces'),
+    path('workspaces/<int:connection_id>/', views.get_patient_workspace_detail, name='patient-workspace-detail'),
     
     # QR Code Scanning endpoints
     path('qr/validate/<str:token>/', views.validate_qr_token, name='validate-qr-token'),

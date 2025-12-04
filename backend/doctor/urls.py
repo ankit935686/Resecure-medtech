@@ -31,6 +31,11 @@ urlpatterns = [
     path('connections/<int:connection_id>/reject/', views.reject_connection_request, name='reject-connection'),
     path('connections/<int:connection_id>/remove/', views.remove_patient_connection, name='remove-connection'),
     
+    # Patient workspace endpoints
+    path('workspaces/', views.doctor_list_workspaces, name='doctor-workspaces'),
+    path('workspaces/<int:connection_id>/', views.doctor_workspace_detail, name='doctor-workspace-detail'),
+    path('workspaces/<int:connection_id>/entries/', views.doctor_workspace_add_entry, name='doctor-workspace-add-entry'),
+    
     # QR Code Generation endpoints
     path('qr/generate/', views.generate_qr_token, name='generate-qr'),
     path('qr/tokens/', views.get_my_qr_tokens, name='my-qr-tokens'),
@@ -39,5 +44,9 @@ urlpatterns = [
     # Patient Search endpoints
     path('patients/search/', views.search_patients, name='search-patients'),
     path('patients/connect/', views.create_patient_connection, name='create-patient-connection'),
+    path('patients/<int:patient_id>/profile/', views.get_patient_profile_detail, name='patient-profile-detail'),
+    
+    # Dashboard Summary endpoint
+    path('dashboard/summary/', views.doctor_dashboard_summary, name='dashboard-summary'),
 ]
 

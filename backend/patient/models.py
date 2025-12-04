@@ -257,6 +257,152 @@ class PatientDoctorConnection(models.Model):
         self.save()
 
 
+class DoctorPatientWorkspace(models.Model):
+    """Dedicated workspace for a specific patient-doctor relationship"""
+
+    STATUS_CHOICES = [
+        ('active', 'Active'),
+        ('on_hold', 'On Hold'),
+        ('completed', 'Completed'),
+        ('archived', 'Archived'),
+    ]
+
+    connection = models.OneToOneField(
+        PatientDoctorConnection,
+        on_delete=models.CASCADE,
+        related_name='workspace'
+    )
+    patient = models.ForeignKey(
+        PatientProfile,
+        on_delete=models.CASCADE,
+        related_name='care_workspaces'
+    )
+    doctor = models.ForeignKey(
+        'doctor.DoctorProfile',
+        on_delete=models.CASCADE,
+        related_name='care_workspaces'
+    )
+
+    title = models.CharField(max_length=150, default='Care Journey')
+    summary = models.TextField(blank=True)
+    primary_diagnosis = models.TextField(blank=True)
+    treatment_plan = models.TextField(blank=True)
+    medication_overview = models.TextField(blank=True)
+    lifestyle_guidelines = models.TextField(blank=True)
+    follow_up_instructions = models.TextField(blank=True)
+
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
+    next_review_date = models.DateField(null=True, blank=True)
+    last_synced_at = models.DateTimeField(auto_now=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-updated_at']
+        verbose_name = 'Doctor Patient Workspace'
+        verbose_name_plural = 'Doctor Patient Workspaces'
+
+    def __str__(self):
+        return f"Workspace: {self.patient.full_name} ↔ {self.doctor.display_name or self.doctor.full_name}"
+
+    @classmethod
+    def ensure_for_connection(cls, connection):
+        """Return an existing workspace or create a default one for the connection."""
+        workspace, _ = cls.objects.get_or_create(
+            connection=connection,
+            defaults={
+                'patient': connection.patient,
+                'doctor': connection.doctor,
+                'title': f"{connection.doctor.display_name or connection.doctor.full_name} Care Space",
+                'summary': 'Centralized updates, treatment plans, and guidance from your doctor.',
+            }
+        )
+        return workspace
+
+    def sync_metadata(self):
+        """Ensure patient/doctor references stay in sync with connection."""
+        updated = False
+        if self.patient_id != self.connection.patient_id:
+            self.patient = self.connection.patient
+            updated = True
+        if self.doctor_id != self.connection.doctor_id:
+            self.doctor = self.connection.doctor
+            updated = True
+        if updated:
+            super().save(update_fields=['patient', 'doctor', 'updated_at'])
+
+
+class DoctorPatientTimelineEntry(models.Model):
+    """Timeline of updates, treatments, and guidelines for a workspace"""
+
+    ENTRY_TYPE_CHOICES = [
+        ('update', 'General Update'),
+        ('treatment', 'Treatment Plan'),
+        ('medication', 'Medication'),
+        ('diagnostic', 'Diagnostic/Test'),
+        ('guideline', 'Guideline'),
+        ('appointment', 'Appointment'),
+        ('alert', 'Alert'),
+    ]
+
+    VISIBILITY_CHOICES = [
+        ('patient', 'Shared with Patient'),
+        ('internal', 'Internal Note'),
+    ]
+
+    CREATED_BY_CHOICES = [
+        ('doctor', 'Doctor'),
+        ('patient', 'Patient'),
+        ('system', 'System'),
+    ]
+
+    workspace = models.ForeignKey(
+        DoctorPatientWorkspace,
+        on_delete=models.CASCADE,
+        related_name='timeline_entries'
+    )
+    entry_type = models.CharField(max_length=20, choices=ENTRY_TYPE_CHOICES, default='update')
+    title = models.CharField(max_length=255)
+    summary = models.TextField(blank=True)
+    details = models.TextField(blank=True)
+    attachments = models.JSONField(blank=True, default=list)
+    follow_up_actions = models.TextField(blank=True)
+    visibility = models.CharField(max_length=20, choices=VISIBILITY_CHOICES, default='patient')
+    created_by = models.CharField(max_length=20, choices=CREATED_BY_CHOICES, default='doctor')
+    is_critical = models.BooleanField(default=False)
+    highlight_color = models.CharField(max_length=20, blank=True)
+    meta = models.JSONField(blank=True, default=dict)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Doctor Patient Timeline Entry'
+        verbose_name_plural = 'Doctor Patient Timeline Entries'
+
+    def __str__(self):
+        return f"{self.workspace} · {self.entry_type} · {self.title}"
+
+
+@receiver(post_save, sender=PatientDoctorConnection)
+def auto_create_workspace(sender, instance, **kwargs):
+    """Ensure every accepted connection has a workspace."""
+    if instance.status == 'accepted':
+        workspace = DoctorPatientWorkspace.ensure_for_connection(instance)
+        workspace.sync_metadata()
+        # If this acceptance was recent and there are no entries, add a welcome entry
+        if not workspace.timeline_entries.exists():
+            DoctorPatientTimelineEntry.objects.create(
+                workspace=workspace,
+                entry_type='update',
+                title='Connection Activated',
+                summary='This dedicated space will capture all treatment updates, doctor notes, and guidance for this care journey.',
+                created_by='system'
+            )
+
+
 @receiver(post_save, sender=User)
 def create_patient_profile(sender, instance, created, **kwargs):
     """Create patient profile when a user is created (if they're a patient)"""

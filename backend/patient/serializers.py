@@ -1,7 +1,12 @@
 from rest_framework import serializers
 from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
-from .models import PatientProfile, PatientDoctorConnection
+from .models import (
+    PatientProfile,
+    PatientDoctorConnection,
+    DoctorPatientWorkspace,
+    DoctorPatientTimelineEntry,
+)
 from doctor.models import DoctorProfile
 
 
@@ -268,4 +273,237 @@ class CreateConnectionRequestSerializer(serializers.Serializer):
                 'doctor': "Please provide either doctor_id or doctor_profile_id."
             })
         return attrs
+
+
+# ============= DOCTOR-PATIENT WORKSPACE SERIALIZERS =============
+
+class DoctorPatientTimelineEntrySerializer(serializers.ModelSerializer):
+    """Timeline entries with doctor updates/guidelines"""
+
+    class Meta:
+        model = DoctorPatientTimelineEntry
+        fields = (
+            'id',
+            'entry_type',
+            'title',
+            'summary',
+            'details',
+            'attachments',
+            'follow_up_actions',
+            'visibility',
+            'created_by',
+            'is_critical',
+            'highlight_color',
+            'meta',
+            'created_at',
+            'updated_at',
+        )
+        read_only_fields = ('id', 'created_by', 'created_at', 'updated_at')
+
+
+class DoctorPatientTimelineEntryCreateSerializer(serializers.ModelSerializer):
+    """Input serializer for doctors when creating timeline entries"""
+
+    class Meta:
+        model = DoctorPatientTimelineEntry
+        fields = (
+            'entry_type',
+            'title',
+            'summary',
+            'details',
+            'attachments',
+            'follow_up_actions',
+            'visibility',
+            'is_critical',
+            'highlight_color',
+            'meta',
+        )
+
+
+class DoctorPatientWorkspaceSummarySerializer(serializers.ModelSerializer):
+    """Lightweight summary for workspace cards."""
+
+    connection_id = serializers.IntegerField(source='connection.id', read_only=True)
+    doctor_name = serializers.SerializerMethodField()
+    doctor_id = serializers.CharField(source='doctor.doctor_id', read_only=True)
+    patient_name = serializers.CharField(source='patient.full_name', read_only=True)
+    patient_id = serializers.CharField(source='patient.patient_id', read_only=True)
+    latest_entry = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DoctorPatientWorkspace
+        fields = (
+            'id',
+            'connection_id',
+            'doctor_name',
+            'doctor_id',
+            'patient_name',
+            'patient_id',
+            'title',
+            'summary',
+            'status',
+            'next_review_date',
+            'updated_at',
+            'latest_entry',
+        )
+
+    def get_doctor_name(self, obj):
+        return obj.doctor.display_name or obj.doctor.full_name
+
+    def get_latest_entry(self, obj):
+        entry = obj.timeline_entries.filter(visibility='patient').first()
+        if entry:
+            return DoctorPatientTimelineEntrySerializer(entry).data
+        return None
+
+
+class DoctorPatientWorkspaceDetailSerializer(serializers.ModelSerializer):
+    """Full workspace serializer with plan + timeline."""
+
+    connection_id = serializers.IntegerField(source='connection.id', read_only=True)
+    doctor_profile = serializers.SerializerMethodField()
+    patient_profile = serializers.SerializerMethodField()
+    timeline_entries = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DoctorPatientWorkspace
+        fields = (
+            'id',
+            'connection_id',
+            'title',
+            'summary',
+            'primary_diagnosis',
+            'treatment_plan',
+            'medication_overview',
+            'lifestyle_guidelines',
+            'follow_up_instructions',
+            'status',
+            'next_review_date',
+            'doctor_profile',
+            'patient_profile',
+            'timeline_entries',
+            'updated_at',
+        )
+
+    def get_doctor_profile(self, obj):
+        doctor = obj.doctor
+        return {
+            'name': doctor.display_name or doctor.full_name,
+            'doctor_id': doctor.doctor_id,
+            'specialization': doctor.specialization,
+            'consultation_mode': doctor.consultation_mode,
+            'city': doctor.city,
+            'primary_clinic_hospital': doctor.primary_clinic_hospital,
+        }
+
+    def get_patient_profile(self, obj):
+        patient = obj.patient
+        return {
+            'name': patient.full_name,
+            'patient_id': patient.patient_id,
+            'blood_group': patient.blood_group,
+            'known_allergies': patient.known_allergies,
+            'chronic_conditions': patient.chronic_conditions,
+        }
+
+    def get_timeline_entries(self, obj):
+        limit = self.context.get('entries_limit')
+        include_internal = self.context.get('include_internal_notes', False)
+        entries = obj.timeline_entries.all()
+        if not include_internal:
+            entries = entries.exclude(visibility='internal')
+        if limit:
+            entries = entries[:limit]
+        return DoctorPatientTimelineEntrySerializer(entries, many=True).data
+
+
+class DoctorPatientWorkspaceUpdateSerializer(serializers.ModelSerializer):
+    """Serializer for doctors updating the workspace plan."""
+
+    class Meta:
+        model = DoctorPatientWorkspace
+        fields = (
+            'title',
+            'summary',
+            'primary_diagnosis',
+            'treatment_plan',
+            'medication_overview',
+            'lifestyle_guidelines',
+            'follow_up_instructions',
+            'status',
+            'next_review_date',
+        )
+
+
+class PatientProfileForDoctorSerializer(serializers.ModelSerializer):
+    """Comprehensive patient profile for doctors to view"""
+    
+    connection_status = serializers.SerializerMethodField()
+    age = serializers.SerializerMethodField()
+    workspace_id = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = PatientProfile
+        fields = (
+            'id',
+            'patient_id',
+            'full_name',
+            'first_name',
+            'last_name',
+            'date_of_birth',
+            'age',
+            'gender',
+            'phone_number',
+            'blood_group',
+            'known_allergies',
+            'chronic_conditions',
+            'current_medications',
+            'emergency_contact_name',
+            'emergency_contact_phone',
+            'preferred_language',
+            'preferred_contact_method',
+            'note_for_doctors',
+            'connection_status',
+            'workspace_id',
+            'created_at',
+            'updated_at',
+        )
+        read_only_fields = fields
+    
+    def get_age(self, obj):
+        if obj.date_of_birth:
+            from datetime import date
+            today = date.today()
+            return today.year - obj.date_of_birth.year - (
+                (today.month, today.day) < (obj.date_of_birth.month, obj.date_of_birth.day)
+            )
+        return None
+    
+    def get_connection_status(self, obj):
+        doctor_profile = self.context.get('doctor_profile')
+        if doctor_profile:
+            try:
+                connection = PatientDoctorConnection.objects.get(
+                    patient=obj,
+                    doctor=doctor_profile
+                )
+                return connection.status
+            except PatientDoctorConnection.DoesNotExist:
+                return 'not_connected'
+        return None
+    
+    def get_workspace_id(self, obj):
+        doctor_profile = self.context.get('doctor_profile')
+        if doctor_profile:
+            try:
+                connection = PatientDoctorConnection.objects.get(
+                    patient=obj,
+                    doctor=doctor_profile,
+                    status='accepted'
+                )
+                workspace = DoctorPatientWorkspace.objects.filter(connection=connection).first()
+                return workspace.id if workspace else None
+            except PatientDoctorConnection.DoesNotExist:
+                return None
+        return None
 
