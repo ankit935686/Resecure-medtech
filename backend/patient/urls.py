@@ -39,5 +39,16 @@ urlpatterns = [
     # QR Code Scanning endpoints
     path('qr/validate/<str:token>/', views.validate_qr_token, name='validate-qr-token'),
     path('qr/scan/<str:token>/', views.scan_qr_code, name='scan-qr-code'),
+    
+    # AI Intake Form endpoints (Patient Side)
+    path('intake-forms/', views.list_patient_intake_forms, name='patient-intake-forms'),
+    path('intake-forms/<int:form_id>/', views.get_patient_intake_form_detail, name='patient-intake-form-detail'),
+    path('intake-forms/<int:form_id>/response/', views.save_form_response, name='save-form-response'),
+    path('intake-forms/<int:form_id>/upload/', views.upload_form_file, name='upload-form-file'),
+    path('intake-forms/<int:form_id>/upload/<int:upload_id>/delete/', views.delete_form_upload, name='delete-form-upload'),
+    path('intake-forms/notifications/', views.get_intake_form_notifications, name='intake-form-notifications'),
+    
+    # Dashboard Summary endpoint
+    path('dashboard/summary/', views.patient_dashboard_summary, name='patient-dashboard-summary'),
 ]
 

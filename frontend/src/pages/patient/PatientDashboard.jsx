@@ -25,6 +25,8 @@ import {
   Settings,
   Menu,
   Loader2,
+  ClipboardList,
+  Sparkles,
 } from 'lucide-react';
 import api from '../../services/api';
 import { useAuth } from '../../contexts/AuthContext';
@@ -50,12 +52,15 @@ export default function PatientDashboard() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [careSpaces, setCareSpaces] = useState([]);
   const [careSpacesLoading, setCareSpacesLoading] = useState(true);
+  const [intakeForms, setIntakeForms] = useState([]);
+  const [intakeFormsLoading, setIntakeFormsLoading] = useState(true);
 
   useEffect(() => {
     const initDashboard = async () => {
       try {
         await loadDashboardData();
         await loadCareSpaces();
+        await loadIntakeForms();
       } catch (err) {
         console.error('Dashboard initialization error:', err);
         setError('Failed to load dashboard. Please refresh the page.');
@@ -97,6 +102,18 @@ export default function PatientDashboard() {
       console.error('Error loading care spaces:', err);
     } finally {
       setCareSpacesLoading(false);
+    }
+  };
+
+  const loadIntakeForms = async () => {
+    try {
+      setIntakeFormsLoading(true);
+      const response = await api.patient.getIntakeForms();
+      setIntakeForms(response.forms || []);
+    } catch (err) {
+      console.error('Error loading intake forms:', err);
+    } finally {
+      setIntakeFormsLoading(false);
     }
   };
 
@@ -803,6 +820,90 @@ export default function PatientDashboard() {
                       </div>
                     );
                   })}
+                </div>
+              )}
+            </div>
+
+            {/* Intake Forms Section */}
+            <div className="bg-white rounded-2xl shadow-lg p-6">
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                    <ClipboardList className="w-5 h-5 text-teal-500" />
+                    Forms & Requests
+                  </h3>
+                  <p className="text-sm text-gray-500">Doctor intake forms requiring your input</p>
+                </div>
+              </div>
+
+              {intakeFormsLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="w-6 h-6 text-teal-500 animate-spin" />
+                </div>
+              ) : intakeForms.length === 0 ? (
+                <div className="bg-gradient-to-br from-teal-50 to-cyan-50 border border-teal-100 rounded-2xl p-6 text-center">
+                  <ClipboardList className="w-10 h-10 text-teal-400 mx-auto mb-3" />
+                  <p className="text-gray-600 font-medium mb-2">No pending forms</p>
+                  <p className="text-sm text-gray-500">When your doctors send intake forms, they'll appear here.</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {intakeForms.slice(0, 3).map((form) => {
+                    const statusConfig = {
+                      sent: { color: 'bg-yellow-100 text-yellow-700', label: 'Pending', icon: Clock },
+                      in_progress: { color: 'bg-blue-100 text-blue-700', label: 'In Progress', icon: Activity },
+                      submitted: { color: 'bg-green-100 text-green-700', label: 'Submitted', icon: CheckCircle },
+                      reviewed: { color: 'bg-purple-100 text-purple-700', label: 'Reviewed', icon: CheckCircle },
+                    };
+                    const status = statusConfig[form.status] || statusConfig.sent;
+                    const StatusIcon = status.icon;
+
+                    return (
+                      <div
+                        key={form.id}
+                        className="rounded-2xl border border-gray-100 p-5 bg-gradient-to-br from-white to-teal-50 shadow-sm hover:shadow-lg transition-all"
+                      >
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${status.color}`}>
+                                <StatusIcon className="w-3 h-3" />
+                                {status.label}
+                              </span>
+                              {form.status === 'sent' && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
+                                  <Sparkles className="w-3 h-3" />
+                                  New
+                                </span>
+                              )}
+                            </div>
+                            <h4 className="font-bold text-gray-900">{form.title}</h4>
+                            <p className="text-sm text-gray-500 mt-1">
+                              From: Dr. {form.doctor_name}
+                            </p>
+                            {form.description && (
+                              <p className="text-sm text-gray-600 mt-2 line-clamp-2">{form.description}</p>
+                            )}
+                          </div>
+                          <button
+                            onClick={() => navigate(`/patient/forms/${form.id}`)}
+                            className="px-4 py-2 text-sm font-semibold text-white rounded-xl shadow flex items-center gap-1 bg-gradient-to-r from-teal-500 to-cyan-500 hover:opacity-90 transition"
+                          >
+                            {form.status === 'sent' ? 'Fill Form' : 'View'}
+                            <ChevronRight className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {intakeForms.length > 3 && (
+                    <button
+                      onClick={() => {}}
+                      className="w-full py-3 text-center text-teal-600 font-semibold hover:bg-teal-50 rounded-xl transition-colors"
+                    >
+                      View all {intakeForms.length} forms
+                    </button>
+                  )}
                 </div>
               )}
             </div>

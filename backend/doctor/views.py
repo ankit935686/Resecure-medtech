@@ -1133,3 +1133,491 @@ def doctor_dashboard_summary(request):
             'verification_status': doctor_profile.profile_status,
         }
     }, status=status.HTTP_200_OK)
+
+
+# ===========================
+# AI Intake Form Views (Doctor Side)
+# ===========================
+
+import os
+import json
+import google.generativeai as genai
+from patient.models import AIIntakeForm, IntakeFormResponse, IntakeFormUpload
+from patient.serializers import (
+    AIIntakeFormSerializer,
+    AIIntakeFormCreateSerializer,
+    AIIntakeFormUpdateSerializer,
+    DoctorIntakeFormListSerializer,
+    IntakeFormUploadSerializer,
+)
+
+
+def generate_intake_form_with_gemini(doctor_prompt, patient_context=None):
+    """
+    Generate intake form schema using Gemini API
+    """
+    api_key = os.getenv('GEMINI_API_KEY')
+    if not api_key:
+        return {
+            'success': False,
+            'error': 'GEMINI_API_KEY not configured',
+            'raw_response': None
+        }
+    
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-2.0-flash')
+        
+        # Build the prompt for Gemini
+        system_instruction = """You are a medical intake form generator. Your task is to create a structured intake form based on a doctor's requirements.
+
+Return ONLY a valid JSON object with this EXACT structure (no markdown, no code blocks, no explanations):
+
+{
+    "fields": [
+        {
+            "id": "unique_field_id",
+            "label": "Question or field label",
+            "type": "text|textarea|number|date|select|multiselect|file",
+            "required": true,
+            "placeholder": "Optional placeholder text",
+            "helpText": "Optional help text",
+            "options": ["option1", "option2"],
+            "validation": {"min": 0, "max": 100},
+            "category": "personal|medical|lifestyle|history"
+        }
+    ],
+    "report_uploads": [
+        {
+            "id": "unique_upload_id",
+            "label": "Report name to upload",
+            "description": "Description of what report is needed",
+            "required": true,
+            "upload_type": "medical_report|lab_result|prescription|imaging|document"
+        }
+    ]
+}
+
+Field types:
+- text: Single line text input
+- textarea: Multi-line text input
+- number: Numeric input
+- date: Date picker
+- select: Single choice dropdown
+- multiselect: Multiple choice selection
+- file: File upload (use this in report_uploads section)
+
+Categories help organize fields:
+- personal: Name, age, contact info
+- medical: Current symptoms, conditions, medications
+- lifestyle: Diet, exercise, sleep, habits
+- history: Past medical history, surgeries, family history
+
+Make fields relevant to the doctor's request. Use proper medical terminology but keep questions clear for patients."""
+
+        context_info = ""
+        if patient_context:
+            context_info = f"\nPatient Context: {json.dumps(patient_context, indent=2)}\n"
+        
+        prompt = f"""{system_instruction}
+
+{context_info}
+Doctor's Request: {doctor_prompt}
+
+Generate the intake form JSON now:"""
+        
+        # Call Gemini API
+        response = model.generate_content(prompt)
+        raw_response = response.text.strip()
+        
+        # Clean up the response - remove markdown code blocks if present
+        cleaned_response = raw_response
+        if '```json' in cleaned_response:
+            cleaned_response = cleaned_response.split('```json')[1].split('```')[0]
+        elif '```' in cleaned_response:
+            cleaned_response = cleaned_response.split('```')[1].split('```')[0]
+        
+        cleaned_response = cleaned_response.strip()
+        
+        # Parse JSON response
+        form_data = json.loads(cleaned_response)
+        
+        # Validate and ensure proper structure
+        validated_schema = validate_form_schema(form_data)
+        
+        return {
+            'success': True,
+            'form_schema': validated_schema,
+            'raw_response': raw_response
+        }
+    
+    except json.JSONDecodeError as e:
+        return {
+            'success': False,
+            'error': f'Failed to parse AI response as JSON: {str(e)}',
+            'raw_response': raw_response if 'raw_response' in locals() else None
+        }
+    except Exception as e:
+        return {
+            'success': False,
+            'error': f'Error generating form: {str(e)}',
+            'raw_response': None
+        }
+
+
+def validate_form_schema(schema):
+    """Validate and fix the form schema structure"""
+    import re
+    
+    validated = {
+        'fields': [],
+        'report_uploads': []
+    }
+    
+    # Validate fields
+    if 'fields' in schema and isinstance(schema['fields'], list):
+        for field in schema['fields']:
+            if not isinstance(field, dict):
+                continue
+            
+            # Ensure required properties
+            if 'id' not in field or 'label' not in field or 'type' not in field:
+                if 'label' in field and 'id' not in field:
+                    # Generate ID from label
+                    field_id = re.sub(r'[^a-z0-9_]', '', field['label'].lower().replace(' ', '_'))
+                    field['id'] = field_id[:50]
+                else:
+                    continue
+            
+            # Set default values
+            field.setdefault('required', False)
+            field.setdefault('placeholder', '')
+            field.setdefault('helpText', '')
+            field.setdefault('category', 'medical')
+            
+            # Validate type
+            valid_types = ['text', 'textarea', 'number', 'date', 'select', 'multiselect', 'file']
+            if field['type'] not in valid_types:
+                field['type'] = 'text'
+            
+            validated['fields'].append(field)
+    
+    # Validate report uploads
+    if 'report_uploads' in schema and isinstance(schema['report_uploads'], list):
+        for upload in schema['report_uploads']:
+            if not isinstance(upload, dict):
+                continue
+            
+            # Ensure required properties
+            if 'id' not in upload or 'label' not in upload:
+                if 'label' in upload and 'id' not in upload:
+                    upload_id = re.sub(r'[^a-z0-9_]', '', upload['label'].lower().replace(' ', '_'))
+                    upload['id'] = upload_id[:50]
+                else:
+                    continue
+            
+            # Set default values
+            upload.setdefault('required', False)
+            upload.setdefault('description', '')
+            upload.setdefault('upload_type', 'medical_report')
+            
+            validated['report_uploads'].append(upload)
+    
+    return validated
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def create_ai_intake_form(request):
+    """
+    Create a new AI-generated intake form
+    Doctor provides workspace_id and doctor_prompt
+    """
+    if not hasattr(request.user, 'doctor_profile'):
+        return Response(
+            {'error': 'Only doctors can create intake forms'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    doctor_profile = request.user.doctor_profile
+    
+    # Validate input
+    serializer = AIIntakeFormCreateSerializer(data=request.data, context={'request': request})
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    workspace = serializer.validated_data['workspace']
+    doctor_prompt = serializer.validated_data['doctor_prompt']
+    title = serializer.validated_data.get('title', 'Patient Intake Form')
+    description = serializer.validated_data.get('description', '')
+    
+    # Verify doctor has access to this workspace
+    if workspace.doctor != doctor_profile:
+        return Response(
+            {'error': 'You do not have access to this workspace'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    # Build patient context for better AI generation
+    patient = workspace.patient
+    patient_context = {
+        'patient_name': patient.full_name,
+        'age': patient.date_of_birth.strftime('%Y-%m-%d') if patient.date_of_birth else None,
+        'known_conditions': patient.chronic_conditions if patient.chronic_conditions else None,
+        'allergies': patient.known_allergies if patient.known_allergies else None,
+    }
+    
+    # Generate form using Gemini API
+    result = generate_intake_form_with_gemini(doctor_prompt, patient_context)
+    
+    if not result['success']:
+        return Response(
+            {'error': result['error'], 'raw_response': result['raw_response']},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+    
+    # Create the intake form
+    intake_form = AIIntakeForm.objects.create(
+        workspace=workspace,
+        doctor=doctor_profile,
+        patient=patient,
+        title=title,
+        description=description,
+        doctor_prompt=doctor_prompt,
+        form_schema=result['form_schema'],
+        ai_raw_response=result['raw_response'],
+        status='draft'
+    )
+    
+    # Return the created form
+    return Response(
+        AIIntakeFormSerializer(intake_form, context={'request': request}).data,
+        status=status.HTTP_201_CREATED
+    )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def list_doctor_intake_forms(request):
+    """
+    List all intake forms created by the doctor
+    Optional query params: workspace_id, status
+    """
+    if not hasattr(request.user, 'doctor_profile'):
+        return Response(
+            {'error': 'Only doctors can access this endpoint'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    doctor_profile = request.user.doctor_profile
+    
+    # Base query
+    forms = AIIntakeForm.objects.filter(doctor=doctor_profile).select_related(
+        'patient', 'workspace'
+    ).prefetch_related('uploads', 'response')
+    
+    # Filter by workspace if provided
+    workspace_id = request.query_params.get('workspace_id')
+    if workspace_id:
+        forms = forms.filter(workspace_id=workspace_id)
+    
+    # Filter by status if provided
+    form_status = request.query_params.get('status')
+    if form_status:
+        forms = forms.filter(status=form_status)
+    
+    # Order by most recent first
+    forms = forms.order_by('-created_at')
+    
+    # Serialize and return
+    serializer = DoctorIntakeFormListSerializer(forms, many=True)
+    return Response({'forms': serializer.data}, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def get_intake_form_detail(request, form_id):
+    """
+    Get detailed view of an intake form
+    """
+    if not hasattr(request.user, 'doctor_profile'):
+        return Response(
+            {'error': 'Only doctors can access this endpoint'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    doctor_profile = request.user.doctor_profile
+    
+    try:
+        form = AIIntakeForm.objects.select_related(
+            'patient', 'doctor', 'workspace'
+        ).prefetch_related('uploads', 'response').get(id=form_id)
+        
+        # Verify access
+        if form.doctor != doctor_profile:
+            return Response(
+                {'error': 'You do not have access to this form'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        serializer = AIIntakeFormSerializer(form, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    except AIIntakeForm.DoesNotExist:
+        return Response(
+            {'error': 'Intake form not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+
+@api_view(['PUT', 'PATCH'])
+@permission_classes([permissions.IsAuthenticated])
+def update_intake_form(request, form_id):
+    """
+    Update intake form (title, description, form_schema)
+    Only allowed in draft status
+    """
+    if not hasattr(request.user, 'doctor_profile'):
+        return Response(
+            {'error': 'Only doctors can update intake forms'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    doctor_profile = request.user.doctor_profile
+    
+    try:
+        form = AIIntakeForm.objects.get(id=form_id)
+        
+        # Verify access
+        if form.doctor != doctor_profile:
+            return Response(
+                {'error': 'You do not have access to this form'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Only allow updates in draft status
+        if form.status != 'draft':
+            return Response(
+                {'error': 'Can only update forms in draft status'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Update the form
+        serializer = AIIntakeFormUpdateSerializer(form, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(
+                AIIntakeFormSerializer(form, context={'request': request}).data,
+                status=status.HTTP_200_OK
+            )
+        
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    except AIIntakeForm.DoesNotExist:
+        return Response(
+            {'error': 'Intake form not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def send_intake_form_to_patient(request, form_id):
+    """
+    Send the intake form to the patient
+    Changes status from 'draft' to 'sent'
+    """
+    if not hasattr(request.user, 'doctor_profile'):
+        return Response(
+            {'error': 'Only doctors can send intake forms'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    doctor_profile = request.user.doctor_profile
+    
+    try:
+        form = AIIntakeForm.objects.get(id=form_id)
+        
+        # Verify access
+        if form.doctor != doctor_profile:
+            return Response(
+                {'error': 'You do not have access to this form'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Can only send forms in draft status
+        if form.status != 'draft':
+            return Response(
+                {'error': 'Form has already been sent or is not in draft status'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Validate form has fields
+        if not form.form_schema or not form.form_schema.get('fields'):
+            return Response(
+                {'error': 'Cannot send empty form. Add at least one field.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Send the form
+        form.send_to_patient()
+        
+        # TODO: Create notification for patient
+        # This will be implemented in notification system
+        
+        return Response({
+            'message': 'Form sent to patient successfully',
+            'form': AIIntakeFormSerializer(form, context={'request': request}).data
+        }, status=status.HTTP_200_OK)
+    
+    except AIIntakeForm.DoesNotExist:
+        return Response(
+            {'error': 'Intake form not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+
+@api_view(['DELETE'])
+@permission_classes([permissions.IsAuthenticated])
+def delete_intake_form(request, form_id):
+    """
+    Delete an intake form
+    Only allowed if no response exists
+    """
+    if not hasattr(request.user, 'doctor_profile'):
+        return Response(
+            {'error': 'Only doctors can delete intake forms'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    doctor_profile = request.user.doctor_profile
+    
+    try:
+        form = AIIntakeForm.objects.get(id=form_id)
+        
+        # Verify access
+        if form.doctor != doctor_profile:
+            return Response(
+                {'error': 'You do not have access to this form'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Don't allow deletion if patient has responded
+        if hasattr(form, 'response') and form.response:
+            return Response(
+                {'error': 'Cannot delete form that has been responded to'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        form.delete()
+        
+        return Response(
+            {'message': 'Intake form deleted successfully'},
+            status=status.HTTP_200_OK
+        )
+    
+    except AIIntakeForm.DoesNotExist:
+        return Response(
+            {'error': 'Intake form not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )

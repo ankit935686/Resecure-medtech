@@ -1,11 +1,16 @@
 from rest_framework import status, generics, permissions
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, parser_classes
+from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.response import Response
 from django.contrib.auth import login
 from django.contrib.auth.models import User
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.db.models import Q
 from datetime import datetime
+import os
+import json
+import PyPDF2
+from typing import Dict, List
 from .models import (
     PatientProfile,
     PatientDoctorConnection,
@@ -34,6 +39,324 @@ from .serializers import (
     DoctorPatientWorkspaceSummarySerializer,
     DoctorPatientWorkspaceDetailSerializer,
 )
+
+
+# ===========================
+# AI Analysis Helper Functions
+# ===========================
+
+def analyze_patient_responses(form_data: Dict, response_data: Dict) -> Dict:
+    """Analyze patient's responses and generate insights for the doctor"""
+    
+    insights = {
+        'analyzed_at': datetime.now().isoformat(),
+        'overall_summary': '',
+        'key_findings': [],
+        'symptoms_identified': [],
+        'conditions_mentioned': [],
+        'urgency_level': 'routine',  # routine, moderate, urgent, critical
+        'suggested_actions': [],
+        'red_flags': [],
+        'detailed_analysis': {}
+    }
+    
+    # Extract form fields
+    fields = form_data.get('form_schema', {}).get('fields', [])
+    
+    # Symptom detection keywords
+    symptom_keywords = [
+        'pain', 'ache', 'hurt', 'sore', 'discomfort', 'burning', 'sharp',
+        'fever', 'cough', 'nausea', 'vomiting', 'dizzy', 'headache',
+        'fatigue', 'tired', 'weak', 'bleeding', 'swelling', 'rash',
+        'difficulty', 'unable', 'breathing', 'chest', 'severe'
+    ]
+    
+    # Urgency keywords
+    urgent_keywords = [
+        'severe', 'extreme', 'unbearable', 'emergency', 'critical',
+        'sudden', 'chest pain', 'difficulty breathing', 'blood',
+        'unconscious', 'seizure', 'suicide', 'heart'
+    ]
+    
+    # Chronic condition keywords
+    chronic_keywords = [
+        'diabetes', 'hypertension', 'asthma', 'copd', 'heart disease',
+        'cancer', 'kidney', 'liver', 'arthritis', 'depression', 'anxiety'
+    ]
+    
+    # Analyze each response
+    for field in fields:
+        field_id = field.get('id')
+        field_label = field.get('label', '')
+        field_value = response_data.get(field_id, '')
+        
+        if not field_value:
+            continue
+        
+        answer_lower = str(field_value).lower()
+        
+        field_analysis = {
+            'question': field_label,
+            'answer': field_value,
+            'sentiment': 'neutral',
+            'keywords': [],
+            'concerns': [],
+            'notes': ''
+        }
+        
+        # Check for symptoms
+        found_symptoms = [kw for kw in symptom_keywords if kw in answer_lower]
+        if found_symptoms:
+            field_analysis['keywords'].extend(found_symptoms)
+            field_analysis['sentiment'] = 'concerning'
+            insights['symptoms_identified'].extend(found_symptoms)
+        
+        # Check for urgent indicators
+        found_urgent = [kw for kw in urgent_keywords if kw in answer_lower]
+        if found_urgent:
+            field_analysis['concerns'].extend([f"Urgent keyword: {kw}" for kw in found_urgent])
+            field_analysis['sentiment'] = 'critical'
+            insights['red_flags'].extend(found_urgent)
+        
+        # Check for chronic conditions
+        found_chronic = [kw for kw in chronic_keywords if kw in answer_lower]
+        if found_chronic:
+            field_analysis['keywords'].extend(found_chronic)
+            insights['conditions_mentioned'].extend(found_chronic)
+        
+        # Generate notes
+        if field_analysis['concerns']:
+            field_analysis['notes'] = f"⚠️ This response contains urgent indicators. Requires immediate attention."
+        elif found_symptoms:
+            field_analysis['notes'] = f"Patient mentions: {', '.join(found_symptoms[:3])}"
+        elif found_chronic:
+            field_analysis['notes'] = f"Chronic condition mentioned: {', '.join(found_chronic)}"
+        
+        insights['detailed_analysis'][field_id] = field_analysis
+    
+    # Remove duplicates
+    insights['symptoms_identified'] = list(set(insights['symptoms_identified']))[:10]
+    insights['conditions_mentioned'] = list(set(insights['conditions_mentioned']))[:10]
+    insights['red_flags'] = list(set(insights['red_flags']))[:10]
+    
+    # Generate overall summary
+    summary_parts = []
+    concerning_count = sum(
+        1 for analysis in insights['detailed_analysis'].values()
+        if analysis.get('sentiment') in ['concerning', 'critical']
+    )
+    
+    if concerning_count > 0:
+        summary_parts.append(f"⚠️ {concerning_count} responses require attention.")
+    
+    if insights['symptoms_identified']:
+        summary_parts.append(f"Key symptoms: {', '.join(insights['symptoms_identified'][:5])}")
+    
+    if insights['red_flags']:
+        summary_parts.append(f"🚨 {len(insights['red_flags'])} urgent indicators detected.")
+    
+    if not summary_parts:
+        summary_parts.append("Form completed. Standard follow-up recommended.")
+    
+    insights['overall_summary'] = " ".join(summary_parts)
+    
+    # Determine urgency level
+    critical_count = sum(
+        1 for analysis in insights['detailed_analysis'].values()
+        if analysis.get('sentiment') == 'critical'
+    )
+    
+    if critical_count > 0:
+        insights['urgency_level'] = 'critical'
+        insights['suggested_actions'].append('Immediate doctor review required')
+    elif concerning_count >= 3:
+        insights['urgency_level'] = 'urgent'
+        insights['suggested_actions'].append('Schedule urgent consultation')
+    elif concerning_count >= 1:
+        insights['urgency_level'] = 'moderate'
+        insights['suggested_actions'].append('Schedule follow-up within 1 week')
+    else:
+        insights['suggested_actions'].append('Routine follow-up as scheduled')
+    
+    return insights
+
+
+# ===========================
+# OCR Helper Functions
+# ===========================
+
+def extract_text_from_pdf(file_path: str) -> str:
+    """Extract text from PDF file"""
+    try:
+        with open(file_path, 'rb') as file:
+            pdf_reader = PyPDF2.PdfReader(file)
+            text_parts = []
+            
+            for page in pdf_reader.pages:
+                text_parts.append(page.extract_text())
+            
+            return '\n'.join(text_parts)
+    except Exception as e:
+        print(f"PDF extraction error: {e}")
+        return ""
+
+
+def extract_medical_info_from_text(text: str) -> Dict:
+    """Extract structured medical information from text"""
+    
+    medical_info = {
+        'medications': [],
+        'diagnoses': [],
+        'test_results': [],
+        'vital_signs': {},
+        'allergies': [],
+        'procedures': []
+    }
+    
+    if not text:
+        return medical_info
+    
+    text_lower = text.lower()
+    lines = text.split('\n')
+    
+    # Common medication keywords
+    med_keywords = ['tablet', 'capsule', 'mg', 'ml', 'injection', 'syrup', 
+                   'drops', 'cream', 'ointment', 'dose', 'dosage', 'prescription']
+    
+    # Diagnosis keywords
+    diagnosis_keywords = ['diagnosis', 'diagnosed with', 'condition', 'disease']
+    
+    # Test result keywords
+    test_keywords = ['test', 'result', 'report', 'lab', 'blood', 'urine', 
+                    'x-ray', 'mri', 'ct scan', 'ultrasound']
+    
+    # Vital signs patterns
+    vital_keywords = {
+        'blood_pressure': ['bp', 'blood pressure', 'systolic', 'diastolic'],
+        'heart_rate': ['hr', 'heart rate', 'pulse', 'bpm'],
+        'temperature': ['temp', 'temperature', '°f', '°c', 'fever'],
+        'weight': ['weight', 'kg', 'lbs'],
+        'height': ['height', 'cm', 'feet', 'inches']
+    }
+    
+    # Process each line
+    for line in lines:
+        line_lower = line.lower().strip()
+        
+        if not line_lower or len(line_lower) < 3:
+            continue
+        
+        # Extract medications
+        if any(kw in line_lower for kw in med_keywords):
+            medical_info['medications'].append(line.strip())
+        
+        # Extract diagnoses
+        if any(kw in line_lower for kw in diagnosis_keywords):
+            medical_info['diagnoses'].append(line.strip())
+        
+        # Extract test results
+        if any(kw in line_lower for kw in test_keywords):
+            medical_info['test_results'].append(line.strip())
+        
+        # Extract vital signs
+        for vital, keywords in vital_keywords.items():
+            if any(kw in line_lower for kw in keywords):
+                medical_info['vital_signs'][vital] = line.strip()
+        
+        # Extract allergies
+        if 'allerg' in line_lower:
+            medical_info['allergies'].append(line.strip())
+    
+    # Clean up - remove duplicates and limit entries
+    for key in medical_info:
+        if isinstance(medical_info[key], list):
+            medical_info[key] = list(set([item for item in medical_info[key] if item and len(item) > 3]))[:10]
+    
+    return medical_info
+
+
+def process_document_ocr(upload_instance):
+    """Process a single uploaded document with OCR and extract medical information"""
+    try:
+        file_path = upload_instance.file.path
+        file_type = upload_instance.file_type or ''
+        
+        extracted_text = ''
+        
+        # Extract text based on file type
+        if 'pdf' in file_type.lower():
+            extracted_text = extract_text_from_pdf(file_path)
+        elif 'image' in file_type.lower():
+            # Placeholder for image OCR - would need pytesseract
+            extracted_text = "[Image OCR - Install pytesseract for full functionality]"
+        
+        if extracted_text:
+            # Extract medical information
+            medical_data = extract_medical_info_from_text(extracted_text)
+            
+            # Update upload instance
+            upload_instance.ocr_processed = True
+            upload_instance.ocr_text = extracted_text[:5000]  # Store first 5000 chars
+            upload_instance.ocr_medical_data = medical_data
+            upload_instance.ocr_confidence = 0.85  # Placeholder confidence
+            upload_instance.save()
+            
+            return {
+                'success': True,
+                'text_length': len(extracted_text),
+                'medical_data': medical_data
+            }
+    except Exception as e:
+        print(f"OCR processing error: {e}")
+        return {'success': False, 'error': str(e)}
+
+
+def aggregate_form_ocr_results(form_instance):
+    """Aggregate OCR results from all documents uploaded to a form"""
+    from .models import IntakeFormUpload
+    
+    uploads = IntakeFormUpload.objects.filter(form=form_instance)
+    
+    aggregated = {
+        'total_documents': uploads.count(),
+        'processed_documents': 0,
+        'all_medications': [],
+        'all_diagnoses': [],
+        'all_test_results': [],
+        'all_allergies': [],
+        'vital_signs': {},
+        'extracted_texts': []
+    }
+    
+    for upload in uploads:
+        if upload.ocr_processed and upload.ocr_medical_data:
+            aggregated['processed_documents'] += 1
+            
+            # Aggregate medical data
+            medical_data = upload.ocr_medical_data
+            aggregated['all_medications'].extend(medical_data.get('medications', []))
+            aggregated['all_diagnoses'].extend(medical_data.get('diagnoses', []))
+            aggregated['all_test_results'].extend(medical_data.get('test_results', []))
+            aggregated['all_allergies'].extend(medical_data.get('allergies', []))
+            
+            # Merge vital signs
+            if medical_data.get('vital_signs'):
+                aggregated['vital_signs'].update(medical_data['vital_signs'])
+            
+            # Store reference to extracted text
+            if upload.ocr_text:
+                aggregated['extracted_texts'].append({
+                    'file_name': upload.file_name,
+                    'text_preview': upload.ocr_text[:200]
+                })
+    
+    # Remove duplicates
+    aggregated['all_medications'] = list(set(aggregated['all_medications']))[:20]
+    aggregated['all_diagnoses'] = list(set(aggregated['all_diagnoses']))[:20]
+    aggregated['all_test_results'] = list(set(aggregated['all_test_results']))[:20]
+    aggregated['all_allergies'] = list(set(aggregated['all_allergies']))[:10]
+    
+    return aggregated
 
 
 @ensure_csrf_cookie
@@ -864,3 +1187,462 @@ def scan_qr_code(request, token):
             'city': doctor.city
         }
     }, status=status.HTTP_201_CREATED)
+
+
+# ===========================
+# AI Intake Form Views (Patient Side)
+# ===========================
+
+from .models import AIIntakeForm, IntakeFormResponse, IntakeFormUpload, DoctorPatientTimelineEntry
+from .serializers import (
+    PatientIntakeFormListSerializer,
+    AIIntakeFormSerializer,
+    IntakeFormResponseCreateUpdateSerializer,
+    IntakeFormUploadSerializer,
+)
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def list_patient_intake_forms(request):
+    """
+    List all intake forms sent to the patient
+    Query params: status (optional)
+    """
+    if not hasattr(request.user, 'patient_profile'):
+        return Response(
+            {'error': 'Only patients can access this endpoint'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    patient_profile = request.user.patient_profile
+    
+    # Get all forms sent to this patient
+    forms = AIIntakeForm.objects.filter(
+        patient=patient_profile
+    ).exclude(status='draft').select_related(
+        'doctor', 'workspace'
+    ).prefetch_related('uploads', 'response').order_by('-sent_at')
+    
+    # Filter by status if provided
+    form_status = request.query_params.get('status')
+    if form_status:
+        forms = forms.filter(status=form_status)
+    
+    serializer = PatientIntakeFormListSerializer(forms, many=True)
+    return Response({'forms': serializer.data}, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def get_patient_intake_form_detail(request, form_id):
+    """
+    Get detailed view of an intake form for patient to fill
+    """
+    if not hasattr(request.user, 'patient_profile'):
+        return Response(
+            {'error': 'Only patients can access this endpoint'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    patient_profile = request.user.patient_profile
+    
+    try:
+        form = AIIntakeForm.objects.select_related(
+            'doctor', 'patient', 'workspace'
+        ).prefetch_related('uploads', 'response').get(id=form_id)
+        
+        # Verify access
+        if form.patient != patient_profile:
+            return Response(
+                {'error': 'You do not have access to this form'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Can't view draft forms
+        if form.status == 'draft':
+            return Response(
+                {'error': 'This form has not been sent yet'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        serializer = AIIntakeFormSerializer(form, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    except AIIntakeForm.DoesNotExist:
+        return Response(
+            {'error': 'Intake form not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+
+@api_view(['POST', 'PUT', 'PATCH'])
+@permission_classes([permissions.IsAuthenticated])
+def save_form_response(request, form_id):
+    """
+    Save or update patient's response to an intake form
+    This allows auto-save functionality
+    """
+    if not hasattr(request.user, 'patient_profile'):
+        return Response(
+            {'error': 'Only patients can submit form responses'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    patient_profile = request.user.patient_profile
+    
+    try:
+        form = AIIntakeForm.objects.get(id=form_id)
+        
+        # Verify access
+        if form.patient != patient_profile:
+            return Response(
+                {'error': 'You do not have access to this form'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Can only respond to sent forms
+        if form.status not in ['sent', 'in_progress']:
+            return Response(
+                {'error': 'This form cannot be filled at this time'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Update form status to in_progress if it's sent
+        if form.status == 'sent':
+            form.status = 'in_progress'
+            form.save()
+        
+        # Get or create response
+        response, created = IntakeFormResponse.objects.get_or_create(form=form)
+        
+        # Update response
+        serializer = IntakeFormResponseCreateUpdateSerializer(
+            response, 
+            data=request.data, 
+            partial=True
+        )
+        
+        if serializer.is_valid():
+            serializer.save()
+            
+            # If marked as complete, update form status and run AI analysis
+            if response.is_complete and form.status == 'in_progress':
+                form.mark_as_submitted()
+                
+                # Run AI analysis on patient responses
+                try:
+                    ai_analysis = analyze_patient_responses(
+                        {'form_schema': form.form_schema},
+                        response.response_data
+                    )
+                    form.ai_analysis = ai_analysis
+                    form.ai_summary = ai_analysis.get('overall_summary', '')
+                    
+                    # Aggregate OCR results from all uploaded documents
+                    ocr_aggregated = aggregate_form_ocr_results(form)
+                    form.ocr_results = ocr_aggregated
+                    form.ocr_processed = ocr_aggregated.get('processed_documents', 0) > 0
+                    
+                    form.save()
+                except Exception as e:
+                    print(f"AI analysis error: {e}")
+                
+                # Determine urgency for timeline entry
+                urgency_level = ai_analysis.get('urgency_level', 'routine') if ai_analysis else 'routine'
+                is_critical = urgency_level in ['critical', 'urgent']
+                
+                # Create timeline entry in workspace
+                timeline_summary = f'Patient has completed and submitted the intake form.'
+                if ai_analysis and ai_analysis.get('overall_summary'):
+                    timeline_summary += f"\n\nAI Analysis: {ai_analysis['overall_summary']}"
+                
+                DoctorPatientTimelineEntry.objects.create(
+                    workspace=form.workspace,
+                    entry_type='update',
+                    title=f'Intake Form Submitted: {form.title}',
+                    summary=timeline_summary,
+                    details=f'Form: {form.title}\nCompleted: {response.completion_percentage}% of fields answered\nUrgency: {urgency_level}',
+                    visibility='patient',
+                    created_by='patient',
+                    is_critical=is_critical,
+                    highlight_color='red' if urgency_level == 'critical' else 'orange' if urgency_level == 'urgent' else 'green'
+                )
+            
+            return Response({
+                'message': 'Response saved successfully',
+                'response': serializer.data,
+                'form_status': form.status,
+                'ai_analysis_complete': form.ai_analysis is not None if response.is_complete else False
+            }, status=status.HTTP_200_OK)
+        
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    except AIIntakeForm.DoesNotExist:
+        return Response(
+            {'error': 'Intake form not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser])
+def upload_form_file(request, form_id):
+    """
+    Upload a file for a specific field in the intake form
+    """
+    if not hasattr(request.user, 'patient_profile'):
+        return Response(
+            {'error': 'Only patients can upload files'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    patient_profile = request.user.patient_profile
+    
+    try:
+        form = AIIntakeForm.objects.get(id=form_id)
+        
+        # Verify access
+        if form.patient != patient_profile:
+            return Response(
+                {'error': 'You do not have access to this form'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Validate required fields
+        field_id = request.data.get('field_id')
+        field_label = request.data.get('field_label')
+        file = request.FILES.get('file')
+        
+        if not field_id or not file:
+            return Response(
+                {'error': 'field_id and file are required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Get upload type from request or default
+        upload_type = request.data.get('upload_type', 'document')
+        description = request.data.get('description', '')
+        
+        # Create upload record
+        upload = IntakeFormUpload.objects.create(
+            form=form,
+            field_id=field_id,
+            field_label=field_label or field_id,
+            file=file,
+            file_type=file.content_type,
+            upload_type=upload_type,
+            description=description
+        )
+        
+        # Trigger OCR processing automatically
+        ocr_result = {'success': False}
+        try:
+            ocr_result = process_document_ocr(upload)
+        except Exception as e:
+            print(f"OCR processing failed: {e}")
+        
+        serializer = IntakeFormUploadSerializer(upload, context={'request': request})
+        return Response({
+            'message': 'File uploaded successfully',
+            'upload': serializer.data,
+            'ocr_processed': ocr_result.get('success', False),
+            'medical_data_extracted': bool(ocr_result.get('medical_data'))
+        }, status=status.HTTP_201_CREATED)
+    
+    except AIIntakeForm.DoesNotExist:
+        return Response(
+            {'error': 'Intake form not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+
+@api_view(['DELETE'])
+@permission_classes([permissions.IsAuthenticated])
+def delete_form_upload(request, form_id, upload_id):
+    """
+    Delete an uploaded file from the form
+    """
+    if not hasattr(request.user, 'patient_profile'):
+        return Response(
+            {'error': 'Only patients can delete uploads'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    patient_profile = request.user.patient_profile
+    
+    try:
+        form = AIIntakeForm.objects.get(id=form_id)
+        
+        # Verify access to form
+        if form.patient != patient_profile:
+            return Response(
+                {'error': 'You do not have access to this form'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Get and delete upload
+        upload = IntakeFormUpload.objects.get(id=upload_id, form=form)
+        
+        # Delete the file from storage
+        if upload.file:
+            upload.file.delete()
+        
+        upload.delete()
+        
+        return Response(
+            {'message': 'File deleted successfully'},
+            status=status.HTTP_200_OK
+        )
+    
+    except AIIntakeForm.DoesNotExist:
+        return Response(
+            {'error': 'Intake form not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except IntakeFormUpload.DoesNotExist:
+        return Response(
+            {'error': 'Upload not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def get_intake_form_notifications(request):
+    """
+    Get notifications about intake forms for the patient
+    Returns pending forms count and recent form activities
+    """
+    if not hasattr(request.user, 'patient_profile'):
+        return Response(
+            {'error': 'Only patients can access this endpoint'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    patient_profile = request.user.patient_profile
+    
+    # Count pending forms (sent but not started or in progress)
+    pending_forms = AIIntakeForm.objects.filter(
+        patient=patient_profile,
+        status__in=['sent', 'in_progress']
+    ).count()
+    
+    # Get recently sent forms (last 7 days)
+    from datetime import timedelta
+    seven_days_ago = timezone.now() - timedelta(days=7)
+    
+    recent_forms = AIIntakeForm.objects.filter(
+        patient=patient_profile,
+        sent_at__gte=seven_days_ago
+    ).select_related('doctor', 'workspace').order_by('-sent_at')[:5]
+    
+    recent_forms_data = []
+    for form in recent_forms:
+        recent_forms_data.append({
+            'id': form.id,
+            'title': form.title,
+            'doctor_name': form.doctor.display_name or form.doctor.full_name,
+            'status': form.status,
+            'sent_at': form.sent_at,
+            'is_new': form.status == 'sent'
+        })
+    
+    return Response({
+        'pending_count': pending_forms,
+        'recent_forms': recent_forms_data
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def patient_dashboard_summary(request):
+    """
+    Get summary data for patient dashboard including form notifications
+    """
+    if not hasattr(request.user, 'patient_profile'):
+        return Response(
+            {'error': 'Only patients can access this endpoint'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    patient_profile = request.user.patient_profile
+    
+    # Connected doctors count
+    connected_doctors = PatientDoctorConnection.objects.filter(
+        patient=patient_profile,
+        status='accepted'
+    ).count()
+    
+    # Active workspaces
+    active_workspaces = DoctorPatientWorkspace.objects.filter(
+        patient=patient_profile,
+        status='active'
+    ).count()
+    
+    # Pending forms count
+    pending_forms = AIIntakeForm.objects.filter(
+        patient=patient_profile,
+        status__in=['sent', 'in_progress']
+    ).count()
+    
+    # Submitted forms awaiting review
+    submitted_forms = AIIntakeForm.objects.filter(
+        patient=patient_profile,
+        status='submitted'
+    ).count()
+    
+    # Recent activities from all workspaces
+    recent_activities = DoctorPatientTimelineEntry.objects.filter(
+        workspace__patient=patient_profile,
+        visibility='patient'
+    ).select_related('workspace__doctor').order_by('-created_at')[:5]
+    
+    activities_data = []
+    for activity in recent_activities:
+        activities_data.append({
+            'id': activity.id,
+            'title': activity.title,
+            'summary': activity.summary,
+            'entry_type': activity.entry_type,
+            'created_at': activity.created_at,
+            'doctor_name': activity.workspace.doctor.display_name or activity.workspace.doctor.full_name,
+            'is_critical': activity.is_critical
+        })
+    
+    # Get recent form notifications
+    from datetime import timedelta
+    seven_days_ago = timezone.now() - timedelta(days=7)
+    
+    recent_forms = AIIntakeForm.objects.filter(
+        patient=patient_profile,
+        sent_at__gte=seven_days_ago,
+        status='sent'
+    ).select_related('doctor').order_by('-sent_at')[:3]
+    
+    form_notifications = []
+    for form in recent_forms:
+        form_notifications.append({
+            'id': form.id,
+            'title': form.title,
+            'doctor_name': form.doctor.display_name or form.doctor.full_name,
+            'sent_at': form.sent_at,
+            'type': 'new_form'
+        })
+    
+    return Response({
+        'summary': {
+            'connected_doctors': connected_doctors,
+            'active_workspaces': active_workspaces,
+            'pending_forms': pending_forms,
+            'submitted_forms': submitted_forms
+        },
+        'recent_activities': activities_data,
+        'form_notifications': form_notifications,
+        'patient_info': {
+            'name': patient_profile.full_name,
+            'patient_id': patient_profile.patient_id,
+            'profile_completed': patient_profile.profile_completed
+        }
+    }, status=status.HTTP_200_OK)

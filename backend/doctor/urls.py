@@ -48,5 +48,13 @@ urlpatterns = [
     
     # Dashboard Summary endpoint
     path('dashboard/summary/', views.doctor_dashboard_summary, name='dashboard-summary'),
+    
+    # AI Intake Form endpoints
+    path('intake-forms/create/', views.create_ai_intake_form, name='create-intake-form'),
+    path('intake-forms/', views.list_doctor_intake_forms, name='list-intake-forms'),
+    path('intake-forms/<int:form_id>/', views.get_intake_form_detail, name='intake-form-detail'),
+    path('intake-forms/<int:form_id>/update/', views.update_intake_form, name='update-intake-form'),
+    path('intake-forms/<int:form_id>/send/', views.send_intake_form_to_patient, name='send-intake-form'),
+    path('intake-forms/<int:form_id>/delete/', views.delete_intake_form, name='delete-intake-form'),
 ]
 

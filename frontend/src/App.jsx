@@ -42,11 +42,14 @@ import PatientProfileSetup from './pages/patient/PatientProfileSetup';
 import PatientDashboard from './pages/patient/PatientDashboard';
 import ScanQRCode from './pages/patient/ScanQRCode';
 import PatientWorkspace from './pages/patient/PatientWorkspace';
+import IntakeFormFiller from './pages/patient/IntakeFormFiller';
 
 // Doctor Dashboard
 import DoctorDashboard from './pages/doctor/DoctorDashboard';
 import DoctorPatientWorkspaces from './pages/doctor/DoctorPatientWorkspaces';
 import DoctorWorkspaceDetail from './pages/doctor/DoctorWorkspaceDetail';
+import IntakeFormReview from './pages/doctor/IntakeFormReview';
+import IntakeFormBuilder from './pages/doctor/IntakeFormBuilder';
 
 function App() {
   return (
@@ -117,6 +120,30 @@ function App() {
               </ProtectedRoute>
             }
           />
+          <Route
+            path="/doctor/intake-form/new"
+            element={
+              <ProtectedRoute allowedRoles={['doctor']}>
+                <IntakeFormBuilder />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/doctor/intake-form/:formId"
+            element={
+              <ProtectedRoute allowedRoles={['doctor']}>
+                <IntakeFormReview />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/doctor/intake-form/:formId/edit"
+            element={
+              <ProtectedRoute allowedRoles={['doctor']}>
+                <IntakeFormBuilder />
+              </ProtectedRoute>
+            }
+          />
 
           {/* Protected Routes - Admin */}
           <Route
@@ -174,6 +201,14 @@ function App() {
             element={
               <ProtectedRoute allowedRoles={['patient']}>
                 <PatientWorkspace />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/patient/forms/:formId"
+            element={
+              <ProtectedRoute allowedRoles={['patient']}>
+                <IntakeFormFiller />
               </ProtectedRoute>
             }
           />

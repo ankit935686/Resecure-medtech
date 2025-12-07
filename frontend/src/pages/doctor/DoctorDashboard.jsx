@@ -25,6 +25,9 @@ import {
   ChevronLeft,
   ArrowRight,
   FileText,
+  ClipboardList,
+  Sparkles,
+  Send,
 } from "lucide-react"
 import api from "../../services/api"
 
@@ -46,6 +49,7 @@ function DoctorDashboard() {
   const [showSearchModal, setShowSearchModal] = useState(false)
   const [sidebarExpanded, setSidebarExpanded] = useState(false)
   const [hoveredSidebar, setHoveredSidebar] = useState(false)
+  const [intakeForms, setIntakeForms] = useState([])
 
   const sidebarOpen = sidebarExpanded || hoveredSidebar
 
@@ -56,15 +60,17 @@ function DoctorDashboard() {
   const loadDashboardData = async () => {
     try {
       setLoading(true)
-      const [profileRes, patientsRes, requestsRes] = await Promise.all([
+      const [profileRes, patientsRes, requestsRes, formsRes] = await Promise.all([
         api.doctor.getProfile(),
         api.doctor.getConnectedPatients(),
         api.doctor.getConnectionRequests(),
+        api.doctor.getIntakeForms(),
       ])
 
       setProfile(profileRes)
       setConnectedPatients(patientsRes.connected_patients || [])
       setPendingRequests(requestsRes.pending_requests || [])
+      setIntakeForms(formsRes.forms || [])
     } catch (error) {
       console.error("Error loading dashboard:", error)
     } finally {
@@ -523,6 +529,77 @@ function DoctorDashboard() {
                 ) : (
                   <div className="text-center py-8 text-gray-500">
                     <p className="text-sm">No pending requests</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Intake Forms Activity Section */}
+              <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+                <div className="flex items-center justify-between mb-6">
+                  <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                    <ClipboardList className="w-5 h-5 text-teal-600" />
+                    Intake Forms
+                  </h2>
+                </div>
+
+                {intakeForms.length > 0 ? (
+                  <div className="space-y-3">
+                    {intakeForms.slice(0, 5).map((form) => {
+                      const statusConfig = {
+                        draft: { color: 'bg-gray-100 text-gray-600', label: 'Draft' },
+                        sent: { color: 'bg-yellow-100 text-yellow-700', label: 'Sent' },
+                        in_progress: { color: 'bg-blue-100 text-blue-700', label: 'In Progress' },
+                        submitted: { color: 'bg-green-100 text-green-700', label: 'Submitted' },
+                        reviewed: { color: 'bg-purple-100 text-purple-700', label: 'Reviewed' },
+                      };
+                      const status = statusConfig[form.status] || statusConfig.draft;
+
+                      return (
+                        <div
+                          key={form.id}
+                          className={`flex items-center justify-between p-4 rounded-xl transition-colors ${
+                            form.status === 'submitted' 
+                              ? 'bg-green-50 border border-green-200 hover:bg-green-100' 
+                              : 'bg-gray-50 hover:bg-gray-100'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
+                              form.status === 'submitted' ? 'bg-green-200' : 'bg-teal-200'
+                            }`}>
+                              <FileText className={`w-5 h-5 ${
+                                form.status === 'submitted' ? 'text-green-700' : 'text-teal-700'
+                              }`} />
+                            </div>
+                            <div>
+                              <p className="font-semibold text-gray-900">{form.title}</p>
+                              <p className="text-xs text-gray-500">
+                                Patient: {form.patient_name} • {' '}
+                                <span className={`inline-flex px-1.5 py-0.5 rounded text-xs font-medium ${status.color}`}>
+                                  {status.label}
+                                </span>
+                              </p>
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => navigate(`/doctor/intake-form/${form.id}`)}
+                            className={`px-3 py-1 text-xs font-bold rounded-lg transition-colors ${
+                              form.status === 'submitted'
+                                ? 'bg-green-500 text-white hover:bg-green-600'
+                                : 'bg-teal-500 text-white hover:bg-teal-600'
+                            }`}
+                          >
+                            {form.status === 'submitted' ? 'Review' : 'View'}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="text-center py-8 text-gray-500">
+                    <ClipboardList className="w-12 h-12 mx-auto mb-3 text-gray-300" />
+                    <p className="text-sm">No intake forms yet</p>
+                    <p className="text-xs text-gray-400 mt-1">Create forms from patient workspaces</p>
                   </div>
                 )}
               </div>

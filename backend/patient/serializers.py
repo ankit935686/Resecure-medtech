@@ -507,3 +507,205 @@ class PatientProfileForDoctorSerializer(serializers.ModelSerializer):
                 return None
         return None
 
+
+# ===========================
+# AI Intake Form Serializers
+# ===========================
+
+from .models import AIIntakeForm, IntakeFormResponse, IntakeFormUpload
+
+
+class IntakeFormUploadSerializer(serializers.ModelSerializer):
+    """Serializer for intake form file uploads"""
+    file_url = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = IntakeFormUpload
+        fields = (
+            'id', 'field_id', 'field_label', 'file', 'file_url',
+            'file_name', 'file_size', 'file_type', 'upload_type',
+            'description', 'uploaded_at', 'ocr_processed', 'ocr_text',
+            'ocr_medical_data', 'ocr_confidence'
+        )
+        read_only_fields = ('id', 'uploaded_at', 'file_name', 'file_size',
+                           'ocr_processed', 'ocr_text', 'ocr_medical_data', 'ocr_confidence')
+    
+    def get_file_url(self, obj):
+        request = self.context.get('request')
+        if obj.file and hasattr(obj.file, 'url'):
+            if request:
+                return request.build_absolute_uri(obj.file.url)
+            return obj.file.url
+        return None
+
+
+class IntakeFormResponseSerializer(serializers.ModelSerializer):
+    """Serializer for intake form response"""
+    
+    class Meta:
+        model = IntakeFormResponse
+        fields = (
+            'id', 'response_data', 'is_complete', 'completion_percentage',
+            'started_at', 'last_saved_at', 'completed_at'
+        )
+        read_only_fields = ('id', 'started_at', 'last_saved_at', 'completion_percentage')
+
+
+class AIIntakeFormSerializer(serializers.ModelSerializer):
+    """Base serializer for AI Intake Form"""
+    doctor_name = serializers.CharField(source='doctor.display_name', read_only=True)
+    patient_name = serializers.CharField(source='patient.full_name', read_only=True)
+    uploads = IntakeFormUploadSerializer(many=True, read_only=True)
+    response = IntakeFormResponseSerializer(read_only=True)
+    has_response = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = AIIntakeForm
+        fields = (
+            'id', 'workspace', 'doctor', 'patient', 'doctor_name', 'patient_name',
+            'title', 'description', 'doctor_prompt', 'form_schema', 'status',
+            'created_at', 'updated_at', 'sent_at', 'submitted_at', 'reviewed_at',
+            'ai_summary', 'ai_analysis', 'ocr_processed', 'ocr_results',
+            'uploads', 'response', 'has_response'
+        )
+        read_only_fields = (
+            'id', 'doctor', 'patient', 'created_at', 'updated_at',
+            'sent_at', 'submitted_at', 'reviewed_at', 'ai_raw_response',
+            'ai_analysis', 'ocr_processed', 'ocr_results'
+        )
+    
+    def get_has_response(self, obj):
+        return hasattr(obj, 'response') and obj.response is not None
+
+
+class AIIntakeFormCreateSerializer(serializers.ModelSerializer):
+    """Serializer for creating AI Intake Form with doctor prompt"""
+    
+    class Meta:
+        model = AIIntakeForm
+        fields = (
+            'workspace', 'title', 'description', 'doctor_prompt'
+        )
+    
+    def validate_workspace(self, value):
+        """Ensure doctor has access to this workspace"""
+        request = self.context.get('request')
+        if request and hasattr(request.user, 'doctor_profile'):
+            if value.doctor != request.user.doctor_profile:
+                raise serializers.ValidationError("You don't have access to this workspace.")
+        return value
+
+
+class AIIntakeFormUpdateSerializer(serializers.ModelSerializer):
+    """Serializer for updating form schema and metadata by doctor"""
+    
+    class Meta:
+        model = AIIntakeForm
+        fields = ('title', 'description', 'form_schema')
+    
+    def validate(self, attrs):
+        # Validate form_schema structure if provided
+        form_schema = attrs.get('form_schema')
+        if form_schema:
+            if not isinstance(form_schema, dict):
+                raise serializers.ValidationError({"form_schema": "Must be a valid JSON object."})
+            
+            fields = form_schema.get('fields', [])
+            if not isinstance(fields, list):
+                raise serializers.ValidationError({"form_schema": "Fields must be a list."})
+            
+            # Validate each field has required properties
+            for i, field in enumerate(fields):
+                if not isinstance(field, dict):
+                    raise serializers.ValidationError({
+                        "form_schema": f"Field at index {i} must be an object."
+                    })
+                
+                required_keys = ['id', 'label', 'type']
+                for key in required_keys:
+                    if key not in field:
+                        raise serializers.ValidationError({
+                            "form_schema": f"Field at index {i} missing required key: {key}"
+                        })
+        
+        return attrs
+
+
+class IntakeFormResponseCreateUpdateSerializer(serializers.ModelSerializer):
+    """Serializer for patient to create/update their response"""
+    
+    class Meta:
+        model = IntakeFormResponse
+        fields = ('response_data', 'is_complete')
+    
+    def validate_response_data(self, value):
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("Response data must be a valid JSON object.")
+        return value
+    
+    def update(self, instance, validated_data):
+        # If marking as complete, set completed_at timestamp
+        if validated_data.get('is_complete') and not instance.completed_at:
+            from django.utils import timezone
+            instance.completed_at = timezone.now()
+        
+        return super().update(instance, validated_data)
+
+
+class DoctorIntakeFormListSerializer(serializers.ModelSerializer):
+    """Simplified serializer for listing forms (doctor view)"""
+    patient_name = serializers.CharField(source='patient.full_name', read_only=True)
+    patient_id = serializers.CharField(source='patient.patient_id', read_only=True)
+    has_response = serializers.SerializerMethodField()
+    response_status = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = AIIntakeForm
+        fields = (
+            'id', 'title', 'patient_name', 'patient_id', 'status',
+            'created_at', 'sent_at', 'submitted_at', 'has_response', 'response_status'
+        )
+    
+    def get_has_response(self, obj):
+        return hasattr(obj, 'response') and obj.response is not None
+    
+    def get_response_status(self, obj):
+        if hasattr(obj, 'response') and obj.response:
+            return {
+                'is_complete': obj.response.is_complete,
+                'completion_percentage': obj.response.completion_percentage,
+                'last_saved_at': obj.response.last_saved_at
+            }
+        return None
+
+
+class PatientIntakeFormListSerializer(serializers.ModelSerializer):
+    """Simplified serializer for listing forms (patient view)"""
+    doctor_name = serializers.CharField(source='doctor.display_name', read_only=True)
+    doctor_specialization = serializers.CharField(source='doctor.specialization', read_only=True)
+    has_started = serializers.SerializerMethodField()
+    completion_percentage = serializers.SerializerMethodField()
+    workspace_id = serializers.IntegerField(source='workspace.id', read_only=True, allow_null=True)
+    connection_id = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = AIIntakeForm
+        fields = (
+            'id', 'title', 'description', 'doctor_name', 'doctor_specialization',
+            'status', 'sent_at', 'has_started', 'completion_percentage',
+            'workspace_id', 'connection_id'
+        )
+    
+    def get_has_started(self, obj):
+        return hasattr(obj, 'response') and obj.response is not None
+    
+    def get_completion_percentage(self, obj):
+        if hasattr(obj, 'response') and obj.response:
+            return obj.response.completion_percentage
+        return 0
+    
+    def get_connection_id(self, obj):
+        if obj.workspace:
+            return obj.workspace.connection_id
+        return None
+

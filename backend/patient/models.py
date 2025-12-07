@@ -2,6 +2,7 @@ from django.db import models
 from django.contrib.auth.models import User
 from django.db.models.signals import post_save
 from django.dispatch import receiver
+from django.utils import timezone
 import datetime
 import secrets
 import hashlib
@@ -408,3 +409,259 @@ def create_patient_profile(sender, instance, created, **kwargs):
     """Create patient profile when a user is created (if they're a patient)"""
     # This will be handled manually in the signup view
     pass
+
+
+# ===========================
+# AI Intake Form Models
+# ===========================
+
+class AIIntakeForm(models.Model):
+    """AI-generated intake forms that doctors send to patients"""
+    
+    STATUS_CHOICES = [
+        ('draft', 'Draft'),
+        ('sent', 'Sent to Patient'),
+        ('in_progress', 'Patient is Filling'),
+        ('submitted', 'Submitted by Patient'),
+        ('reviewed', 'Reviewed by Doctor'),
+    ]
+    
+    # Relations
+    workspace = models.ForeignKey(
+        DoctorPatientWorkspace,
+        on_delete=models.CASCADE,
+        related_name='intake_forms'
+    )
+    doctor = models.ForeignKey(
+        'doctor.DoctorProfile',
+        on_delete=models.CASCADE,
+        related_name='created_intake_forms'
+    )
+    patient = models.ForeignKey(
+        PatientProfile,
+        on_delete=models.CASCADE,
+        related_name='received_intake_forms'
+    )
+    
+    # Form metadata
+    title = models.CharField(max_length=255, default='Patient Intake Form')
+    description = models.TextField(blank=True, help_text='Description of what this form is for')
+    
+    # AI generation data
+    doctor_prompt = models.TextField(help_text='Doctor\'s input prompt for AI generation')
+    ai_raw_response = models.TextField(blank=True, help_text='Raw AI response for debugging')
+    
+    # Form schema (JSON structure of fields)
+    form_schema = models.JSONField(
+        help_text='Structured form fields with type, label, required, options, etc.',
+        default=dict
+    )
+    
+    # Status and workflow
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
+    
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    
+    # AI-generated summary and analysis
+    ai_summary = models.TextField(blank=True, help_text='AI-generated summary of patient responses')
+    ai_analysis = models.JSONField(
+        blank=True,
+        null=True,
+        help_text='Detailed AI analysis: insights, urgency, key findings, symptoms, conditions'
+    )
+    
+    # OCR processing status for uploaded documents
+    ocr_processed = models.BooleanField(default=False, help_text='Whether OCR has been run on uploaded documents')
+    ocr_results = models.JSONField(
+        blank=True,
+        null=True,
+        help_text='Aggregated OCR results from all uploaded documents'
+    )
+    
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'AI Intake Form'
+        verbose_name_plural = 'AI Intake Forms'
+    
+    def __str__(self):
+        return f"{self.title} - {self.patient.full_name} (from {self.doctor.display_name or self.doctor.full_name})"
+    
+    def send_to_patient(self):
+        """Mark form as sent to patient"""
+        self.status = 'sent'
+        self.sent_at = timezone.now()
+        self.save()
+    
+    def mark_as_submitted(self):
+        """Mark form as submitted by patient"""
+        self.status = 'submitted'
+        self.submitted_at = timezone.now()
+        self.save()
+    
+    def mark_as_reviewed(self):
+        """Mark form as reviewed by doctor"""
+        self.status = 'reviewed'
+        self.reviewed_at = timezone.now()
+        self.save()
+
+
+class IntakeFormResponse(models.Model):
+    """Patient's responses to an intake form"""
+    
+    form = models.OneToOneField(
+        AIIntakeForm,
+        on_delete=models.CASCADE,
+        related_name='response'
+    )
+    
+    # Response data (JSON structure matching form_schema with answers)
+    response_data = models.JSONField(
+        help_text='Patient\'s answers to all form fields',
+        default=dict
+    )
+    
+    # Timestamps
+    started_at = models.DateTimeField(auto_now_add=True)
+    last_saved_at = models.DateTimeField(auto_now=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    
+    # Progress tracking
+    is_complete = models.BooleanField(default=False)
+    completion_percentage = models.IntegerField(default=0)
+    
+    class Meta:
+        verbose_name = 'Intake Form Response'
+        verbose_name_plural = 'Intake Form Responses'
+    
+    def __str__(self):
+        return f"Response to: {self.form.title}"
+    
+    def calculate_completion(self):
+        """Calculate form completion percentage"""
+        if not self.form.form_schema or not self.form.form_schema.get('fields'):
+            return 0
+        
+        fields = self.form.form_schema.get('fields', [])
+        if not fields:
+            return 0
+        
+        answered = sum(
+            1 for field in fields
+            if field.get('id') in self.response_data and self.response_data[field.get('id')]
+        )
+        
+        return int((answered / len(fields)) * 100)
+    
+    def save(self, *args, **kwargs):
+        # Auto-calculate completion percentage
+        self.completion_percentage = self.calculate_completion()
+        super().save(*args, **kwargs)
+
+
+class IntakeFormUpload(models.Model):
+    """Uploaded files/reports as part of intake form response"""
+    
+    UPLOAD_TYPE_CHOICES = [
+        ('medical_report', 'Medical Report'),
+        ('lab_result', 'Lab Result'),
+        ('prescription', 'Prescription'),
+        ('imaging', 'Imaging/Scan'),
+        ('document', 'Document'),
+        ('other', 'Other'),
+    ]
+    
+    form = models.ForeignKey(
+        AIIntakeForm,
+        on_delete=models.CASCADE,
+        related_name='uploads'
+    )
+    
+    # Field reference from form schema
+    field_id = models.CharField(max_length=100, help_text='ID of the file upload field in form schema')
+    field_label = models.CharField(max_length=255, help_text='Label of the upload field')
+    
+    # File details
+    file = models.FileField(upload_to='intake_form_uploads/%Y/%m/%d/')
+    file_name = models.CharField(max_length=255)
+    file_size = models.BigIntegerField(help_text='File size in bytes')
+    file_type = models.CharField(max_length=100, blank=True)
+    upload_type = models.CharField(max_length=20, choices=UPLOAD_TYPE_CHOICES, default='document')
+    
+    # Metadata
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+    description = models.CharField(max_length=500, blank=True)
+    
+    # OCR and AI analysis results
+    ocr_processed = models.BooleanField(default=False, help_text='Whether OCR has been run on this file')
+    ocr_text = models.TextField(blank=True, help_text='Extracted text from OCR processing')
+    ocr_medical_data = models.JSONField(
+        blank=True,
+        null=True,
+        help_text='Structured medical information extracted via OCR (medications, diagnoses, test results, etc.)'
+    )
+    ocr_confidence = models.FloatField(default=0.0, help_text='OCR confidence score (0-1)')
+    
+    class Meta:
+        ordering = ['-uploaded_at']
+        verbose_name = 'Intake Form Upload'
+        verbose_name_plural = 'Intake Form Uploads'
+    
+    def __str__(self):
+        return f"{self.file_name} - {self.form.title}"
+    
+    def save(self, *args, **kwargs):
+        if self.file:
+            self.file_name = self.file.name
+            self.file_size = self.file.size
+        super().save(*args, **kwargs)
+
+
+# ===========================
+# Signal Handlers for AI Intake Forms
+# ===========================
+
+from django.db.models.signals import pre_save
+
+# Store old status before save
+_form_status_tracker = {}
+
+@receiver(pre_save, sender=AIIntakeForm)
+def track_form_status_change(sender, instance, **kwargs):
+    """Track the old status before saving"""
+    if instance.pk:
+        try:
+            old_instance = AIIntakeForm.objects.get(pk=instance.pk)
+            _form_status_tracker[instance.pk] = old_instance.status
+        except AIIntakeForm.DoesNotExist:
+            pass
+
+
+@receiver(post_save, sender=AIIntakeForm)
+def create_timeline_entry_on_form_sent(sender, instance, created, **kwargs):
+    """
+    Create a timeline entry when a form is sent to patient
+    """
+    if not created and instance.pk in _form_status_tracker:
+        old_status = _form_status_tracker.get(instance.pk)
+        
+        # Create timeline entry when form is sent
+        if old_status != 'sent' and instance.status == 'sent':
+            DoctorPatientTimelineEntry.objects.create(
+                workspace=instance.workspace,
+                entry_type='update',
+                title=f'New Intake Form: {instance.title}',
+                summary=f'Dr. {instance.doctor.display_name or instance.doctor.full_name} has sent you an intake form to fill.',
+                details=f'Form: {instance.title}\nDescription: {instance.description}\nPlease complete this form at your earliest convenience.',
+                visibility='patient',
+                created_by='doctor',
+                is_critical=True,
+                highlight_color='blue'
+            )
+        
+        # Clean up tracker
+        del _form_status_tracker[instance.pk]

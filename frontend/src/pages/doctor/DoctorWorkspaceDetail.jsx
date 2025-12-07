@@ -22,6 +22,8 @@ import {
   MessageSquare,
   Phone,
   Mail,
+  Sparkles,
+  Send,
 } from 'lucide-react';
 import api from '../../services/api';
 
@@ -321,6 +323,34 @@ export default function DoctorWorkspaceDetail() {
                 )}
               </div>
             )}
+
+            {/* Quick Actions */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+              <h4 className="font-bold text-gray-900 mb-4 flex items-center space-x-2">
+                <ClipboardList className="w-5 h-5 text-blue-500" />
+                <span>Quick Actions</span>
+              </h4>
+              <div className="space-y-3">
+                <button
+                  onClick={() =>
+                    navigate(
+                      `/doctor/intake-form/new?workspace=${connectionId}&patient=${encodeURIComponent(
+                        workspace.patient_profile?.name || 'Patient'
+                      )}`
+                    )
+                  }
+                  className="w-full flex items-center gap-3 px-4 py-3 bg-gradient-to-r from-blue-50 to-indigo-50 hover:from-blue-100 hover:to-indigo-100 rounded-xl transition-all group"
+                >
+                  <div className="w-10 h-10 bg-gradient-to-r from-blue-500 to-indigo-500 rounded-xl flex items-center justify-center group-hover:scale-105 transition-transform">
+                    <Sparkles className="w-5 h-5 text-white" />
+                  </div>
+                  <div className="text-left">
+                    <p className="font-medium text-gray-900">AI Intake Form</p>
+                    <p className="text-xs text-gray-500">Request info from patient</p>
+                  </div>
+                </button>
+              </div>
+            </div>
           </div>
 
           {/* Main Content */}

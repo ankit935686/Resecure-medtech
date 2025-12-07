@@ -12,6 +12,10 @@ import {
   ClipboardList,
   Sparkles,
   ChevronRight,
+  FileText,
+  Clock,
+  CheckCircle,
+  Send,
 } from 'lucide-react';
 import api from '../../services/api';
 
@@ -39,13 +43,22 @@ export default function PatientWorkspace() {
   const [workspace, setWorkspace] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [intakeForms, setIntakeForms] = useState([]);
 
   useEffect(() => {
     const fetchWorkspace = async () => {
       try {
         setLoading(true);
-        const data = await api.patient.getCareWorkspaceDetail(connectionId, { limit: 50 });
-        setWorkspace(data);
+        const [workspaceData, formsData] = await Promise.all([
+          api.patient.getCareWorkspaceDetail(connectionId, { limit: 50 }),
+          api.patient.getIntakeForms()
+        ]);
+        setWorkspace(workspaceData);
+        // Filter forms for this workspace's doctor
+        const doctorForms = (formsData.forms || []).filter(
+          f => f.workspace_id === parseInt(connectionId) || f.connection_id === parseInt(connectionId)
+        );
+        setIntakeForms(doctorForms);
         setError('');
       } catch (err) {
         console.error('Error loading workspace:', err);
@@ -241,6 +254,73 @@ export default function PatientWorkspace() {
           </div>
 
           <div className="space-y-6">
+            {/* Pending Intake Forms Section */}
+            {intakeForms.length > 0 && (
+              <div className="bg-white rounded-3xl shadow-xl p-6 border-2 border-teal-200">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="w-12 h-12 rounded-2xl bg-teal-100 flex items-center justify-center">
+                    <FileText className="w-6 h-6 text-teal-600" />
+                  </div>
+                  <div>
+                    <p className="text-xs uppercase tracking-wide text-teal-600 font-semibold">Action Required</p>
+                    <h4 className="text-lg font-bold text-gray-900">Intake Forms</h4>
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  {intakeForms.map((form) => {
+                    const statusConfig = {
+                      sent: { color: 'bg-yellow-100 text-yellow-700', label: 'Pending', icon: Clock },
+                      in_progress: { color: 'bg-blue-100 text-blue-700', label: 'In Progress', icon: Activity },
+                      submitted: { color: 'bg-green-100 text-green-700', label: 'Submitted', icon: CheckCircle },
+                      reviewed: { color: 'bg-purple-100 text-purple-700', label: 'Reviewed', icon: CheckCircle },
+                    };
+                    const status = statusConfig[form.status] || statusConfig.sent;
+                    const StatusIcon = status.icon;
+                    const canFill = form.status === 'sent' || form.status === 'in_progress';
+
+                    return (
+                      <div
+                        key={form.id}
+                        className={`p-4 rounded-xl border ${canFill ? 'border-teal-200 bg-teal-50' : 'border-gray-200 bg-gray-50'}`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${status.color}`}>
+                                <StatusIcon className="w-3 h-3" />
+                                {status.label}
+                              </span>
+                            </div>
+                            <h5 className="font-semibold text-gray-900 text-sm">{form.title}</h5>
+                            {form.description && (
+                              <p className="text-xs text-gray-500 mt-1 line-clamp-2">{form.description}</p>
+                            )}
+                          </div>
+                          {canFill && (
+                            <button
+                              onClick={() => navigate(`/patient/forms/${form.id}`)}
+                              className="px-3 py-2 bg-teal-600 text-white text-xs font-semibold rounded-lg hover:bg-teal-700 transition-colors flex items-center gap-1"
+                            >
+                              <Send className="w-3 h-3" />
+                              Fill Form
+                            </button>
+                          )}
+                          {!canFill && (
+                            <button
+                              onClick={() => navigate(`/patient/forms/${form.id}`)}
+                              className="px-3 py-2 bg-gray-200 text-gray-700 text-xs font-semibold rounded-lg hover:bg-gray-300 transition-colors"
+                            >
+                              View
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             <div className="bg-white rounded-3xl shadow-xl p-6">
               <div className="flex items-center gap-3 mb-4">
                 <div className="w-12 h-12 rounded-2xl bg-blue-50 flex items-center justify-center">

@@ -358,6 +358,55 @@ const api = {
       const response = await apiClient.get('/doctor/dashboard/summary/');
       return response.data;
     },
+
+    // AI Intake Form endpoints (Doctor Side)
+    createIntakeForm: async (workspaceId, doctorPrompt, title = 'Patient Intake Form', description = '') => {
+      // POST /api/doctor/intake-forms/create/
+      await api.core.getCsrfToken();
+      const response = await apiClient.post('/doctor/intake-forms/create/', {
+        workspace: workspaceId,
+        doctor_prompt: doctorPrompt,
+        title,
+        description,
+      });
+      return response.data;
+    },
+
+    getIntakeForms: async (workspaceId = null, status = null) => {
+      // GET /api/doctor/intake-forms/
+      const params = {};
+      if (workspaceId) params.workspace_id = workspaceId;
+      if (status) params.status = status;
+      const response = await apiClient.get('/doctor/intake-forms/', { params });
+      return response.data;
+    },
+
+    getIntakeFormDetail: async (formId) => {
+      // GET /api/doctor/intake-forms/<id>/
+      const response = await apiClient.get(`/doctor/intake-forms/${formId}/`);
+      return response.data;
+    },
+
+    updateIntakeForm: async (formId, data) => {
+      // PUT /api/doctor/intake-forms/<id>/update/
+      await api.core.getCsrfToken();
+      const response = await apiClient.put(`/doctor/intake-forms/${formId}/update/`, data);
+      return response.data;
+    },
+
+    sendIntakeForm: async (formId) => {
+      // POST /api/doctor/intake-forms/<id>/send/
+      await api.core.getCsrfToken();
+      const response = await apiClient.post(`/doctor/intake-forms/${formId}/send/`);
+      return response.data;
+    },
+
+    deleteIntakeForm: async (formId) => {
+      // DELETE /api/doctor/intake-forms/<id>/delete/
+      await api.core.getCsrfToken();
+      const response = await apiClient.delete(`/doctor/intake-forms/${formId}/delete/`);
+      return response.data;
+    },
   },
 
   // ==================== ADMIN API ====================
@@ -582,6 +631,65 @@ const api = {
       // POST /api/patient/qr/scan/<token>/
       await api.core.getCsrfToken();
       const response = await apiClient.post(`/patient/qr/scan/${token}/`);
+      return response.data;
+    },
+
+    // AI Intake Form endpoints (Patient Side)
+    getIntakeForms: async (status = null) => {
+      // GET /api/patient/intake-forms/
+      const params = status ? { status } : {};
+      const response = await apiClient.get('/patient/intake-forms/', { params });
+      return response.data;
+    },
+
+    getIntakeFormDetail: async (formId) => {
+      // GET /api/patient/intake-forms/<id>/
+      const response = await apiClient.get(`/patient/intake-forms/${formId}/`);
+      return response.data;
+    },
+
+    saveFormResponse: async (formId, responseData, isComplete = false) => {
+      // POST /api/patient/intake-forms/<id>/response/
+      await api.core.getCsrfToken();
+      const response = await apiClient.post(`/patient/intake-forms/${formId}/response/`, {
+        response_data: responseData,
+        is_complete: isComplete,
+      });
+      return response.data;
+    },
+
+    uploadFormFile: async (formId, fieldId, fieldLabel, file, uploadType = 'document', description = '') => {
+      // POST /api/patient/intake-forms/<id>/upload/
+      await api.core.getCsrfToken();
+      const formData = new FormData();
+      formData.append('field_id', fieldId);
+      formData.append('field_label', fieldLabel);
+      formData.append('file', file);
+      formData.append('upload_type', uploadType);
+      formData.append('description', description);
+
+      const response = await apiClient.post(`/patient/intake-forms/${formId}/upload/`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      return response.data;
+    },
+
+    deleteFormUpload: async (formId, uploadId) => {
+      // DELETE /api/patient/intake-forms/<id>/upload/<upload_id>/delete/
+      await api.core.getCsrfToken();
+      const response = await apiClient.delete(`/patient/intake-forms/${formId}/upload/${uploadId}/delete/`);
+      return response.data;
+    },
+
+    getFormNotifications: async () => {
+      // GET /api/patient/intake-forms/notifications/
+      const response = await apiClient.get('/patient/intake-forms/notifications/');
+      return response.data;
+    },
+
+    getDashboardSummary: async () => {
+      // GET /api/patient/dashboard/summary/
+      const response = await apiClient.get('/patient/dashboard/summary/');
       return response.data;
     },
   },
