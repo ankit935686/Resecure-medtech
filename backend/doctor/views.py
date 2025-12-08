@@ -1141,7 +1141,8 @@ def doctor_dashboard_summary(request):
 
 import os
 import json
-import google.generativeai as genai
+import time
+import requests
 from patient.models import AIIntakeForm, IntakeFormResponse, IntakeFormUpload
 from patient.serializers import (
     AIIntakeFormSerializer,
@@ -1154,22 +1155,32 @@ from patient.serializers import (
 
 def generate_intake_form_with_gemini(doctor_prompt, patient_context=None):
     """
-    Generate intake form schema using Gemini API
+    Generate intake form schema using Groq API with retry logic and error handling
     """
-    api_key = os.getenv('GEMINI_API_KEY')
+    api_key = os.getenv('GROQ_API_KEY')
     if not api_key:
         return {
             'success': False,
-            'error': 'GEMINI_API_KEY not configured',
-            'raw_response': None
+            'error': 'GROQ_API_KEY not configured. Please add your Groq API key to environment variables.',
+            'raw_response': None,
+            'quota_exceeded': False
         }
     
-    try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-2.0-flash')
-        
-        # Build the prompt for Gemini
-        system_instruction = """You are a medical intake form generator. Your task is to create a structured intake form based on a doctor's requirements.
+    # Groq API endpoint and model
+    api_url = 'https://api.groq.com/openai/v1/chat/completions'
+    model_name = 'llama-3.3-70b-versatile'
+    
+    # Retry configuration
+    max_retries = 3
+    base_delay = 2
+    
+    last_error = None
+    raw_response = None
+    
+    for attempt in range(max_retries):
+        try:
+            # Build the system prompt
+            system_instruction = """You are a medical intake form generator. Your task is to create a structured intake form based on a doctor's requirements.
 
 Return ONLY a valid JSON object with this EXACT structure (no markdown, no code blocks, no explanations):
 
@@ -1215,54 +1226,123 @@ Categories help organize fields:
 
 Make fields relevant to the doctor's request. Use proper medical terminology but keep questions clear for patients."""
 
-        context_info = ""
-        if patient_context:
-            context_info = f"\nPatient Context: {json.dumps(patient_context, indent=2)}\n"
-        
-        prompt = f"""{system_instruction}
-
-{context_info}
+            context_info = ""
+            if patient_context:
+                context_info = f"\nPatient Context: {json.dumps(patient_context, indent=2)}\n"
+            
+            user_prompt = f"""{context_info}
 Doctor's Request: {doctor_prompt}
 
 Generate the intake form JSON now:"""
+            
+            # Call Grok API
+            headers = {
+                'Content-Type': 'application/json',
+                'Authorization': f'Bearer {api_key}'
+            }
+            
+            payload = {
+                'messages': [
+                    {'role': 'system', 'content': system_instruction},
+                    {'role': 'user', 'content': user_prompt}
+                ],
+                'model': model_name,
+                'stream': False,
+                'temperature': 0.7,
+                'max_tokens': 2048
+            }
+            
+            response = requests.post(api_url, headers=headers, json=payload, timeout=30)
+            
+            # Check for errors
+            if response.status_code != 200:
+                error_detail = response.json() if response.text else {'error': 'Unknown error'}
+                raise Exception(f"Groq API error (status {response.status_code}): {error_detail}")
+            
+            # Parse response
+            response_data = response.json()
+            raw_response = response_data['choices'][0]['message']['content'].strip()
+            
+            # Clean up the response - remove markdown code blocks if present
+            cleaned_response = raw_response
+            if '```json' in cleaned_response:
+                cleaned_response = cleaned_response.split('```json')[1].split('```')[0]
+            elif '```' in cleaned_response:
+                cleaned_response = cleaned_response.split('```')[1].split('```')[0]
+            
+            cleaned_response = cleaned_response.strip()
+            
+            # Parse JSON response
+            form_data = json.loads(cleaned_response)
+            
+            # Validate and ensure proper structure
+            validated_schema = validate_form_schema(form_data)
+            
+            return {
+                'success': True,
+                'form_schema': validated_schema,
+                'raw_response': raw_response,
+                'quota_exceeded': False,
+                'model_used': model_name
+            }
         
-        # Call Gemini API
-        response = model.generate_content(prompt)
-        raw_response = response.text.strip()
+        except json.JSONDecodeError as e:
+            last_error = f'Failed to parse AI response as JSON: {str(e)}'
+            if attempt < max_retries - 1:
+                time.sleep(base_delay * (2 ** attempt))
+                continue
         
-        # Clean up the response - remove markdown code blocks if present
-        cleaned_response = raw_response
-        if '```json' in cleaned_response:
-            cleaned_response = cleaned_response.split('```json')[1].split('```')[0]
-        elif '```' in cleaned_response:
-            cleaned_response = cleaned_response.split('```')[1].split('```')[0]
+        except requests.exceptions.Timeout:
+            last_error = 'Request timeout'
+            if attempt < max_retries - 1:
+                time.sleep(base_delay * (2 ** attempt))
+                continue
         
-        cleaned_response = cleaned_response.strip()
+        except requests.exceptions.RequestException as e:
+            last_error = str(e)
+            error_message = str(e).lower()
+            
+            # Check if it's a quota/rate limit error
+            if any(keyword in error_message for keyword in ['quota', 'rate limit', '429', 'resource exhausted']):
+                return {
+                    'success': False,
+                    'error': 'AI service quota exceeded. The free tier limit has been reached. Please try again later or upgrade your API plan.',
+                    'raw_response': raw_response,
+                    'quota_exceeded': True,
+                    'details': last_error
+                }
+            
+            # Retry on transient errors
+            if attempt < max_retries - 1 and any(keyword in error_message for keyword in ['timeout', 'connection', '503', '500']):
+                time.sleep(base_delay * (2 ** attempt))
+                continue
         
-        # Parse JSON response
-        form_data = json.loads(cleaned_response)
-        
-        # Validate and ensure proper structure
-        validated_schema = validate_form_schema(form_data)
-        
-        return {
-            'success': True,
-            'form_schema': validated_schema,
-            'raw_response': raw_response
-        }
+        except Exception as e:
+            last_error = str(e)
+            error_message = str(e).lower()
+            
+            # Check if it's a quota/rate limit error
+            if any(keyword in error_message for keyword in ['quota', 'rate limit', '429', 'resource exhausted']):
+                return {
+                    'success': False,
+                    'error': 'AI service quota exceeded. The free tier limit has been reached. Please try again later.',
+                    'raw_response': raw_response,
+                    'quota_exceeded': True,
+                    'details': last_error
+                }
+            
+            # Retry on transient errors
+            if attempt < max_retries - 1:
+                time.sleep(base_delay * (2 ** attempt))
+                continue
     
-    except json.JSONDecodeError as e:
-        return {
-            'success': False,
-            'error': f'Failed to parse AI response as JSON: {str(e)}',
-            'raw_response': raw_response if 'raw_response' in locals() else None
-        }
-    except Exception as e:
-        return {
-            'success': False,
-            'error': f'Error generating form: {str(e)}',
-            'raw_response': None
-        }
+    # If all retries failed
+    return {
+        'success': False,
+        'error': f'Failed to generate form after {max_retries} attempts. Last error: {last_error}',
+        'raw_response': raw_response,
+        'quota_exceeded': False
+    }
 
 
 def validate_form_schema(schema):
@@ -1371,9 +1451,16 @@ def create_ai_intake_form(request):
     result = generate_intake_form_with_gemini(doctor_prompt, patient_context)
     
     if not result['success']:
+        # Use 429 status code for quota errors, 500 for other errors
+        error_status = status.HTTP_429_TOO_MANY_REQUESTS if result.get('quota_exceeded') else status.HTTP_500_INTERNAL_SERVER_ERROR
         return Response(
-            {'error': result['error'], 'raw_response': result['raw_response']},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            {
+                'error': result['error'],
+                'raw_response': result.get('raw_response'),
+                'quota_exceeded': result.get('quota_exceeded', False),
+                'details': result.get('details')
+            },
+            status=error_status
         )
     
     # Create the intake form
@@ -1621,3 +1708,13 @@ def delete_intake_form(request, form_id):
             {'error': 'Intake form not found'},
             status=status.HTTP_404_NOT_FOUND
         )
+
+
+# ============================================================================
+# MEDICAL REPORT MANAGEMENT - Import from patient views
+# ============================================================================
+from patient.views import (
+    list_medical_reports,
+    medical_report_detail,
+    add_report_comment
+)

@@ -1,0 +1,115 @@
+from django.urls import path
+from . import views
+
+urlpatterns = [
+    # Doctor endpoints - Medical History Management
+    path(
+        'doctor/workspace/<int:workspace_id>/history/',
+        views.doctor_get_workspace_history,
+        name='doctor-workspace-history'
+    ),
+    path(
+        'doctor/workspace/<int:workspace_id>/history/summary/',
+        views.doctor_get_history_summary,
+        name='doctor-history-summary'
+    ),
+    path(
+        'doctor/workspace/<int:workspace_id>/history/clinical-summary/',
+        views.doctor_get_clinical_summary,
+        name='doctor-clinical-summary'
+    ),
+    path(
+        'doctor/workspace/<int:workspace_id>/history/<str:category>/',
+        views.doctor_get_history_by_category,
+        name='doctor-history-by-category'
+    ),
+    path(
+        'doctor/history/add/',
+        views.doctor_add_history_entry,
+        name='doctor-add-history'
+    ),
+    path(
+        'doctor/history/<int:entry_id>/update/',
+        views.doctor_update_history_entry,
+        name='doctor-update-history'
+    ),
+    path(
+        'doctor/history/<int:entry_id>/verify/',
+        views.doctor_verify_entry,
+        name='doctor-verify-history'
+    ),
+    path(
+        'doctor/history/<int:entry_id>/delete/',
+        views.doctor_delete_history_entry,
+        name='doctor-delete-history'
+    ),
+    path(
+        'doctor/history/<int:entry_id>/timeline/',
+        views.doctor_get_entry_timeline,
+        name='doctor-history-timeline'
+    ),
+    path(
+        'doctor/history/bulk-import/',
+        views.doctor_bulk_import_history,
+        name='doctor-bulk-import-history'
+    ),
+    
+    # Integration endpoints - Auto-import from other sources
+    path(
+        'integration/import-intake-form/<int:form_id>/',
+        views.trigger_intake_form_import,
+        name='import-from-intake-form'
+    ),
+    path(
+        'integration/import-medical-report/<int:report_id>/',
+        views.trigger_medical_report_import,
+        name='import-from-medical-report'
+    ),
+    
+    # Patient endpoints - Medical History Management
+    path(
+        'patient/my-history/',
+        views.patient_get_my_history,
+        name='patient-my-history'
+    ),
+    path(
+        'patient/my-history/summary/',
+        views.patient_get_my_summary,
+        name='patient-history-summary'
+    ),
+    path(
+        'patient/my-history/dashboard/',
+        views.patient_get_dashboard_view,
+        name='patient-history-dashboard'
+    ),
+    path(
+        'patient/my-history/health-overview/',
+        views.patient_get_health_overview,
+        name='patient-health-overview'
+    ),
+    path(
+        'patient/my-history/<str:category>/',
+        views.patient_get_history_by_category,
+        name='patient-history-by-category'
+    ),
+    path(
+        'patient/history/add/',
+        views.patient_add_history_entry,
+        name='patient-add-history'
+    ),
+    path(
+        'patient/history/<int:entry_id>/update/',
+        views.patient_update_history_entry,
+        name='patient-update-history'
+    ),
+    path(
+        'patient/history/<int:entry_id>/delete/',
+        views.patient_delete_history_entry,
+        name='patient-delete-history'
+    ),
+    path(
+        'patient/history/<int:entry_id>/timeline/',
+        views.patient_get_entry_timeline,
+        name='patient-history-timeline'
+    ),
+]

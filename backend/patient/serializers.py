@@ -1,11 +1,15 @@
 from rest_framework import serializers
 from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
+from django.utils import timezone
+import os
 from .models import (
     PatientProfile,
     PatientDoctorConnection,
     DoctorPatientWorkspace,
     DoctorPatientTimelineEntry,
+    MedicalReport,
+    ReportComment,
 )
 from doctor.models import DoctorProfile
 
@@ -364,6 +368,9 @@ class DoctorPatientWorkspaceDetailSerializer(serializers.ModelSerializer):
     doctor_profile = serializers.SerializerMethodField()
     patient_profile = serializers.SerializerMethodField()
     timeline_entries = serializers.SerializerMethodField()
+    intake_forms_summary = serializers.SerializerMethodField()
+    latest_ocr_analysis = serializers.SerializerMethodField()
+    latest_ai_analysis = serializers.SerializerMethodField()
 
     class Meta:
         model = DoctorPatientWorkspace
@@ -382,6 +389,9 @@ class DoctorPatientWorkspaceDetailSerializer(serializers.ModelSerializer):
             'doctor_profile',
             'patient_profile',
             'timeline_entries',
+            'intake_forms_summary',
+            'latest_ocr_analysis',
+            'latest_ai_analysis',
             'updated_at',
         )
 
@@ -398,12 +408,24 @@ class DoctorPatientWorkspaceDetailSerializer(serializers.ModelSerializer):
 
     def get_patient_profile(self, obj):
         patient = obj.patient
+        from datetime import date
+        age = None
+        if patient.date_of_birth:
+            today = date.today()
+            age = today.year - patient.date_of_birth.year - ((today.month, today.day) < (patient.date_of_birth.month, patient.date_of_birth.day))
+        
         return {
             'name': patient.full_name,
             'patient_id': patient.patient_id,
+            'email': patient.user.email,
+            'phone_number': patient.phone_number,
+            'age': age,
+            'gender': patient.gender,
             'blood_group': patient.blood_group,
             'known_allergies': patient.known_allergies,
             'chronic_conditions': patient.chronic_conditions,
+            'emergency_contact_name': patient.emergency_contact_name,
+            'emergency_contact_phone': patient.emergency_contact_phone,
         }
 
     def get_timeline_entries(self, obj):
@@ -415,6 +437,62 @@ class DoctorPatientWorkspaceDetailSerializer(serializers.ModelSerializer):
         if limit:
             entries = entries[:limit]
         return DoctorPatientTimelineEntrySerializer(entries, many=True).data
+
+    def get_intake_forms_summary(self, obj):
+        """Get summary of all intake forms for this workspace"""
+        from .models import AIIntakeForm
+        forms = AIIntakeForm.objects.filter(
+            workspace=obj
+        ).order_by('-created_at')
+        
+        return [{
+            'id': form.id,
+            'title': form.title,
+            'status': form.status,
+            'created_at': form.created_at,
+            'submitted_at': form.submitted_at,
+            'reviewed_at': form.reviewed_at,
+            'has_response': hasattr(form, 'response'),
+            'ocr_processed': form.ocr_processed,
+            'has_ai_analysis': bool(form.ai_analysis),
+            'uploads_count': form.uploads.count()
+        } for form in forms]
+
+    def get_latest_ocr_analysis(self, obj):
+        """Get the latest OCR analysis from submitted intake forms"""
+        from .models import AIIntakeForm
+        latest_form = AIIntakeForm.objects.filter(
+            workspace=obj,
+            status='submitted',
+            ocr_processed=True
+        ).order_by('-submitted_at').first()
+        
+        if latest_form and latest_form.ocr_results:
+            return {
+                'form_id': latest_form.id,
+                'form_title': latest_form.title,
+                'processed_at': latest_form.submitted_at,
+                'ocr_data': latest_form.ocr_results
+            }
+        return None
+
+    def get_latest_ai_analysis(self, obj):
+        """Get the latest AI analysis from submitted intake forms"""
+        from .models import AIIntakeForm
+        latest_form = AIIntakeForm.objects.filter(
+            workspace=obj,
+            status='submitted',
+            ai_analysis__isnull=False
+        ).order_by('-submitted_at').first()
+        
+        if latest_form and latest_form.ai_analysis:
+            return {
+                'form_id': latest_form.id,
+                'form_title': latest_form.title,
+                'analyzed_at': latest_form.submitted_at,
+                'analysis': latest_form.ai_analysis
+            }
+        return None
 
 
 class DoctorPatientWorkspaceUpdateSerializer(serializers.ModelSerializer):
@@ -708,4 +786,197 @@ class PatientIntakeFormListSerializer(serializers.ModelSerializer):
         if obj.workspace:
             return obj.workspace.connection_id
         return None
+
+
+# ===========================
+# Medical Report Serializers
+# ===========================
+
+from .models import MedicalReport, ReportComment
+
+
+class ReportCommentSerializer(serializers.ModelSerializer):
+    """Serializer for report comments"""
+    author_name = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = ReportComment
+        fields = (
+            'id', 'report', 'author_type', 'author_user', 'author_name',
+            'comment', 'is_internal', 'created_at', 'updated_at'
+        )
+        read_only_fields = ('id', 'author_user', 'author_type', 'author_name', 'created_at', 'updated_at')
+    
+    def get_author_name(self, obj):
+        if obj.author_type == 'patient':
+            try:
+                return obj.author_user.patient_profile.full_name
+            except:
+                return obj.author_user.username
+        elif obj.author_type == 'doctor':
+            try:
+                return obj.author_user.doctor_profile.display_name or obj.author_user.doctor_profile.full_name
+            except:
+                return obj.author_user.username
+        return obj.author_user.username
+
+
+class MedicalReportListSerializer(serializers.ModelSerializer):
+    """Simplified serializer for listing medical reports"""
+    report_type_display = serializers.CharField(source='get_report_type_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    patient_name = serializers.CharField(source='patient.full_name', read_only=True)
+    file_url = serializers.SerializerMethodField()
+    file_extension = serializers.CharField(read_only=True)
+    is_image = serializers.BooleanField(read_only=True)
+    is_pdf = serializers.BooleanField(read_only=True)
+    comment_count = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = MedicalReport
+        fields = (
+            'id', 'title', 'report_type', 'report_type_display', 'report_date',
+            'status', 'status_display', 'patient_name', 'file_url', 'file_name',
+            'file_size', 'file_extension', 'is_image', 'is_pdf',
+            'ocr_processed', 'ai_processed', 'reviewed_by_doctor',
+            'is_critical', 'requires_action', 'uploaded_at', 'comment_count'
+        )
+    
+    def get_file_url(self, obj):
+        if obj.file:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.file.url)
+            return obj.file.url
+        return None
+    
+    def get_comment_count(self, obj):
+        return obj.comments.filter(is_internal=False).count()
+
+
+class MedicalReportDetailSerializer(serializers.ModelSerializer):
+    """Detailed serializer for individual medical report"""
+    report_type_display = serializers.CharField(source='get_report_type_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    patient_name = serializers.CharField(source='patient.full_name', read_only=True)
+    file_url = serializers.SerializerMethodField()
+    file_extension = serializers.CharField(read_only=True)
+    is_image = serializers.BooleanField(read_only=True)
+    is_pdf = serializers.BooleanField(read_only=True)
+    comments = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = MedicalReport
+        fields = (
+            'id', 'workspace', 'patient', 'patient_name',
+            'report_type', 'report_type_display', 'title', 'description', 'report_date',
+            'file_url', 'file_name', 'file_size', 'file_type', 'file_extension',
+            'is_image', 'is_pdf',
+            'status', 'status_display',
+            'ocr_processed', 'ocr_text', 'ocr_confidence', 'ocr_processed_at',
+            'extracted_medications', 'extracted_diagnoses', 'extracted_vitals',
+            'extracted_test_results', 'extracted_allergies',
+            'ai_processed', 'ai_summary', 'ai_key_findings', 'ai_recommendations',
+            'ai_processed_at',
+            'reviewed_by_doctor', 'doctor_notes', 'reviewed_at',
+            'is_critical', 'requires_action',
+            'uploaded_at', 'updated_at', 'comments'
+        )
+        read_only_fields = (
+            'id', 'file_name', 'file_size', 'file_type', 'file_extension',
+            'is_image', 'is_pdf', 'status', 'ocr_processed', 'ocr_text',
+            'ocr_confidence', 'ocr_processed_at', 'extracted_medications',
+            'extracted_diagnoses', 'extracted_vitals', 'extracted_test_results',
+            'extracted_allergies', 'ai_processed', 'ai_summary', 'ai_key_findings',
+            'ai_recommendations', 'ai_processed_at', 'uploaded_at', 'updated_at'
+        )
+    
+    def get_file_url(self, obj):
+        if obj.file:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.file.url)
+            return obj.file.url
+        return None
+    
+    def get_comments(self, obj):
+        # For patients, exclude internal doctor notes
+        request = self.context.get('request')
+        comments = obj.comments.all()
+        
+        if request and hasattr(request.user, 'patient_profile'):
+            comments = comments.filter(is_internal=False)
+        
+        return ReportCommentSerializer(comments, many=True).data
+
+
+class MedicalReportCreateSerializer(serializers.ModelSerializer):
+    """Serializer for creating medical reports (patient upload)"""
+    
+    class Meta:
+        model = MedicalReport
+        fields = (
+            'workspace', 'report_type', 'title', 'description',
+            'report_date', 'file'
+        )
+    
+    def validate_file(self, value):
+        """Validate file upload"""
+        # Check file size (50 MB limit)
+        if value.size > 50 * 1024 * 1024:
+            raise serializers.ValidationError("File size cannot exceed 50 MB.")
+        
+        # Check file type
+        allowed_extensions = ['.pdf', '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.doc', '.docx', '.txt']
+        ext = os.path.splitext(value.name)[1].lower()
+        
+        if ext not in allowed_extensions:
+            raise serializers.ValidationError(
+                f"File type {ext} not allowed. Allowed types: {', '.join(allowed_extensions)}"
+            )
+        
+        return value
+    
+    def validate(self, attrs):
+        """Ensure workspace belongs to the patient"""
+        request = self.context.get('request')
+        if request and hasattr(request.user, 'patient_profile'):
+            workspace = attrs.get('workspace')
+            if workspace.patient != request.user.patient_profile:
+                raise serializers.ValidationError("You can only upload reports to your own workspace.")
+        return attrs
+    
+    def create(self, validated_data):
+        # Set patient from request context
+        request = self.context.get('request')
+        if request and hasattr(request.user, 'patient_profile'):
+            validated_data['patient'] = request.user.patient_profile
+        
+        # Set file type
+        if 'file' in validated_data:
+            file_ext = os.path.splitext(validated_data['file'].name)[1].lower()
+            validated_data['file_type'] = file_ext
+        
+        return super().create(validated_data)
+
+
+class MedicalReportUpdateSerializer(serializers.ModelSerializer):
+    """Serializer for updating medical report (patient can update, doctor can review)"""
+    
+    class Meta:
+        model = MedicalReport
+        fields = (
+            'title', 'description', 'report_date', 'is_critical',
+            'requires_action', 'doctor_notes', 'reviewed_by_doctor'
+        )
+    
+    def update(self, instance, validated_data):
+        request = self.context.get('request')
+        
+        # If doctor is reviewing
+        if request and hasattr(request.user, 'doctor_profile'):
+            if 'reviewed_by_doctor' in validated_data and validated_data['reviewed_by_doctor']:
+                instance.reviewed_at = timezone.now()
+        
+        return super().update(instance, validated_data)
 

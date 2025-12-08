@@ -56,5 +56,10 @@ urlpatterns = [
     path('intake-forms/<int:form_id>/update/', views.update_intake_form, name='update-intake-form'),
     path('intake-forms/<int:form_id>/send/', views.send_intake_form_to_patient, name='send-intake-form'),
     path('intake-forms/<int:form_id>/delete/', views.delete_intake_form, name='delete-intake-form'),
+    
+    # Medical Report Management endpoints (Doctor access)
+    path('workspaces/<int:workspace_id>/reports/', views.list_medical_reports, name='doctor-list-reports'),
+    path('workspaces/<int:workspace_id>/reports/<int:report_id>/', views.medical_report_detail, name='doctor-report-detail'),
+    path('workspaces/<int:workspace_id>/reports/<int:report_id>/comment/', views.add_report_comment, name='doctor-report-comment'),
 ]
 

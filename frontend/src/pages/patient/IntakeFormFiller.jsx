@@ -488,6 +488,8 @@ function FormField({ field, value, onChange, onMultiSelectChange, error, disable
 
 // Upload Field Component
 function UploadField({ upload, files, uploading, error, disabled, onUpload, onDelete, fileInputRef }) {
+  const localFileInputRef = useRef(null);
+  
   const handleFileChange = (e) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -558,13 +560,16 @@ function UploadField({ upload, files, uploading, error, disabled, onUpload, onDe
         <div>
           <input
             type="file"
-            ref={fileInputRef}
+            ref={(el) => {
+              localFileInputRef.current = el;
+              if (fileInputRef) fileInputRef(el);
+            }}
             onChange={handleFileChange}
             accept="image/*,.pdf"
             className="hidden"
           />
           <button
-            onClick={() => fileInputRef?.click()}
+            onClick={() => localFileInputRef.current?.click()}
             disabled={uploading}
             className="w-full py-3 border-2 border-dashed border-gray-300 rounded-xl text-gray-500 hover:border-teal-400 hover:text-teal-600 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
           >

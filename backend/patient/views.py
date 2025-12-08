@@ -1,5 +1,6 @@
 from rest_framework import status, generics, permissions
-from rest_framework.decorators import api_view, permission_classes, parser_classes
+from rest_framework.decorators import api_view, permission_classes, parser_classes, authentication_classes
+from rest_framework.authentication import TokenAuthentication, SessionAuthentication
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.response import Response
 from django.contrib.auth import login
@@ -9,6 +10,7 @@ from django.db.models import Q
 from datetime import datetime
 import os
 import json
+import requests
 import PyPDF2
 from typing import Dict, List
 from .models import (
@@ -16,6 +18,9 @@ from .models import (
     PatientDoctorConnection,
     ConnectionToken,
     DoctorPatientWorkspace,
+    MedicalReport,
+    ReportComment,
+    DoctorPatientTimelineEntry,
 )
 from doctor.models import DoctorProfile
 from django.utils import timezone
@@ -38,6 +43,12 @@ from .serializers import (
     # Workspace Serializers
     DoctorPatientWorkspaceSummarySerializer,
     DoctorPatientWorkspaceDetailSerializer,
+    # Medical Report Serializers
+    MedicalReportListSerializer,
+    MedicalReportDetailSerializer,
+    MedicalReportCreateSerializer,
+    MedicalReportUpdateSerializer,
+    ReportCommentSerializer,
 )
 
 
@@ -1199,6 +1210,11 @@ from .serializers import (
     AIIntakeFormSerializer,
     IntakeFormResponseCreateUpdateSerializer,
     IntakeFormUploadSerializer,
+    MedicalReportListSerializer,
+    MedicalReportDetailSerializer,
+    MedicalReportCreateSerializer,
+    MedicalReportUpdateSerializer,
+    ReportCommentSerializer,
 )
 
 
@@ -1431,6 +1447,8 @@ def upload_form_file(request, form_id):
             field_id=field_id,
             field_label=field_label or field_id,
             file=file,
+            file_name=file.name,
+            file_size=file.size,
             file_type=file.content_type,
             upload_type=upload_type,
             description=description
@@ -1646,3 +1664,590 @@ def patient_dashboard_summary(request):
             'profile_completed': patient_profile.profile_completed
         }
     }, status=status.HTTP_200_OK)
+
+
+# ============================================================================
+# MEDICAL REPORT MANAGEMENT WITH OCR AND AI AUTOMATION
+# ============================================================================
+
+def process_medical_report_ocr(file_obj):
+    """
+    Process OCR on medical report file (PDF or image)
+    Returns extracted text and structured medical data
+    """
+    try:
+        file_extension = file_obj.name.lower().split('.')[-1]
+        extracted_text = ""
+        
+        if file_extension == 'pdf':
+            # Extract text from PDF using PyPDF2
+            try:
+                pdf_reader = PyPDF2.PdfReader(file_obj)
+                text_parts = []
+                
+                for page in pdf_reader.pages:
+                    text_parts.append(page.extract_text())
+                
+                extracted_text = '\n'.join(text_parts)
+                file_obj.seek(0)  # Reset file pointer
+            except Exception as e:
+                print(f"PDF extraction error: {e}")
+                extracted_text = ""
+        else:
+            # For images, use Tesseract (if available)
+            try:
+                import pytesseract
+                from PIL import Image
+                import io
+                
+                image = Image.open(io.BytesIO(file_obj.read()))
+                extracted_text = pytesseract.image_to_string(image)
+                file_obj.seek(0)  # Reset file pointer
+            except ImportError:
+                return {
+                    'success': False,
+                    'error': 'Image OCR not available. Please install pytesseract.',
+                    'text': '',
+                    'medical_data': {}
+                }
+        
+        # Extract structured medical information
+        medical_data = extract_medical_info_from_text(extracted_text)
+        
+        return {
+            'success': True,
+            'text': extracted_text,
+            'medical_data': medical_data,
+            'error': None
+        }
+    
+    except Exception as e:
+        return {
+            'success': False,
+            'error': str(e),
+            'text': '',
+            'medical_data': {}
+        }
+
+
+def analyze_report_with_ai(ocr_text, medical_data, report_type):
+    """
+    Analyze medical report using Groq AI
+    Returns structured AI analysis with insights and recommendations
+    """
+    try:
+        # Prepare analysis prompt based on report type
+        report_type_context = {
+            'lab_report': 'laboratory test results and biomarkers',
+            'x_ray': 'X-ray imaging findings and interpretations',
+            'mri_scan': 'MRI scan results and anatomical observations',
+            'ct_scan': 'CT scan findings and diagnostic insights',
+            'ultrasound': 'ultrasound examination results',
+            'prescription': 'prescription medications and dosage instructions',
+            'ecg': 'ECG/EKG cardiac readings and rhythm analysis',
+            'blood_test': 'blood test results and blood chemistry',
+            'pathology': 'pathology report findings',
+            'discharge_summary': 'hospital discharge summary and care instructions',
+            'consultation_notes': 'medical consultation notes and observations',
+            'other': 'medical document'
+        }
+        
+        context = report_type_context.get(report_type, 'medical document')
+        
+        prompt = f"""You are a medical AI assistant analyzing a {context}. 
+        
+OCR Extracted Text:
+{ocr_text[:2000]}
+
+Structured Medical Data:
+{json.dumps(medical_data, indent=2)}
+
+Please provide a comprehensive analysis including:
+1. Key Findings: List the most important medical findings
+2. Values Analysis: Analyze any test values (normal/abnormal ranges)
+3. Clinical Significance: Explain what these findings mean
+4. Risk Assessment: Identify any concerning findings or risks
+5. Recommendations: Suggest follow-up actions or consultations needed
+6. Summary: Brief overall assessment
+
+Format your response as JSON with these exact keys:
+{{
+    "key_findings": ["finding1", "finding2", ...],
+    "values_analysis": {{"parameter": "analysis", ...}},
+    "clinical_significance": "explanation text",
+    "risk_assessment": "risk evaluation text",
+    "recommendations": ["recommendation1", "recommendation2", ...],
+    "summary": "brief summary text"
+}}
+
+Be thorough but concise. Focus on medically relevant information."""
+
+        # Call Groq API
+        groq_api_key = os.getenv('GROQ_API_KEY')
+        if not groq_api_key:
+            return Response(
+                {'error': 'GROQ_API_KEY not configured'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+        response = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {groq_api_key}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "llama-3.1-70b-versatile",
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "You are a medical AI assistant specializing in analyzing medical reports and providing clinical insights. Always respond with valid JSON."
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                "temperature": 0.3,
+                "max_tokens": 2000
+            }
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            ai_text = result['choices'][0]['message']['content']
+            
+            # Try to parse as JSON
+            try:
+                # Remove markdown code blocks if present
+                if '```json' in ai_text:
+                    ai_text = ai_text.split('```json')[1].split('```')[0].strip()
+                elif '```' in ai_text:
+                    ai_text = ai_text.split('```')[1].split('```')[0].strip()
+                
+                ai_analysis = json.loads(ai_text)
+                
+                return {
+                    'success': True,
+                    'analysis': ai_analysis,
+                    'error': None
+                }
+            except json.JSONDecodeError:
+                # If JSON parsing fails, create structured response from text
+                return {
+                    'success': True,
+                    'analysis': {
+                        'summary': ai_text,
+                        'key_findings': [],
+                        'recommendations': [],
+                        'clinical_significance': ai_text[:500]
+                    },
+                    'error': 'AI response was not in JSON format, using text summary'
+                }
+        else:
+            return {
+                'success': False,
+                'analysis': {},
+                'error': f'AI API error: {response.status_code}'
+            }
+    
+    except Exception as e:
+        return {
+            'success': False,
+            'analysis': {},
+            'error': str(e)
+        }
+
+
+@api_view(['POST'])
+@authentication_classes([TokenAuthentication, SessionAuthentication])
+@permission_classes([permissions.IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser])
+def upload_medical_report(request, workspace_id):
+    """
+    Patient uploads a medical report to their workspace
+    Automatically processes OCR and AI analysis
+    """
+    try:
+        if not hasattr(request.user, 'patient_profile'):
+            return Response(
+                {'error': 'Patient profile not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        patient_profile = request.user.patient_profile
+        
+        # Get workspace and verify patient access
+        workspace = DoctorPatientWorkspace.objects.get(
+            id=workspace_id,
+            patient=patient_profile,
+            status='active'
+        )
+        
+        # Validate file upload
+        if 'file' not in request.FILES:
+            return Response(
+                {'error': 'No file provided'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        file_obj = request.FILES['file']
+        
+        # Validate file type
+        allowed_extensions = ['pdf', 'jpg', 'jpeg', 'png', 'dcm', 'dicom']
+        file_extension = file_obj.name.lower().split('.')[-1]
+        
+        if file_extension not in allowed_extensions:
+            return Response(
+                {'error': f'File type not supported. Allowed: {", ".join(allowed_extensions)}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Get report date, default to today if not provided
+        report_date = request.data.get('report_date')
+        if not report_date:
+            from datetime import date
+            report_date = date.today()
+        
+        # Create medical report instance
+        report_data = {
+            'workspace': workspace,
+            'patient': patient_profile,
+            'report_type': request.data.get('report_type', 'other'),
+            'title': request.data.get('title', f'Medical Report - {file_obj.name}'),
+            'description': request.data.get('description', ''),
+            'report_date': report_date,
+            'file': file_obj
+        }
+        
+        # Create the report directly
+        report = MedicalReport.objects.create(**report_data)
+        
+        # Update status to processing
+        report.status = 'processing'
+        report.save()
+        
+        # Process OCR
+        ocr_result = process_medical_report_ocr(file_obj)
+        
+        if ocr_result['success']:
+            report.ocr_text = ocr_result['text']
+            # Store medical data in appropriate fields
+            medical_data = ocr_result.get('medical_data', {})
+            report.extracted_medications = medical_data.get('medications', [])
+            report.extracted_diagnoses = medical_data.get('diagnoses', [])
+            report.extracted_vitals = medical_data.get('vital_signs', {})
+            report.extracted_test_results = medical_data.get('test_results', [])
+            report.extracted_allergies = medical_data.get('allergies', [])
+            report.ocr_processed = True
+            report.ocr_processed_at = timezone.now()
+            
+            # Process AI analysis
+            ai_result = analyze_report_with_ai(
+                ocr_result['text'],
+                ocr_result['medical_data'],
+                report.report_type
+            )
+            
+            if ai_result['success']:
+                analysis = ai_result.get('analysis', {})
+                report.ai_summary = analysis.get('summary', '')
+                report.ai_key_findings = analysis.get('key_findings', [])
+                report.ai_recommendations = '\n'.join(analysis.get('recommendations', []))
+                report.ai_raw_response = analysis
+                report.ai_processed = True
+                report.ai_processed_at = timezone.now()
+                report.status = 'ready_for_review'
+        
+        # Update status to ready for review or ocr_complete
+        if not report.ai_processed and report.ocr_processed:
+            report.status = 'ocr_complete'
+        elif not report.ocr_processed:
+            report.status = 'uploaded'
+        
+        report.save()
+        
+        # Note: Timeline entry is automatically created by the post_save signal
+        
+        # Return detailed response
+        response_serializer = MedicalReportDetailSerializer(report, context={'request': request})
+        
+        return Response({
+            'message': 'Medical report uploaded and processed successfully',
+            'report': response_serializer.data,
+            'ocr_success': ocr_result.get('success', False),
+            'ai_success': report.ai_processed
+        }, status=status.HTTP_201_CREATED)
+    
+    except PatientProfile.DoesNotExist:
+        return Response(
+            {'error': 'Patient profile not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except DoctorPatientWorkspace.DoesNotExist:
+        return Response(
+            {'error': 'Workspace not found or access denied'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@authentication_classes([TokenAuthentication, SessionAuthentication])
+@permission_classes([permissions.IsAuthenticated])
+def list_medical_reports(request, workspace_id):
+    """
+    List all medical reports in a workspace
+    Accessible by both patient and doctor
+    """
+    try:
+        # Determine user role
+        is_doctor = hasattr(request.user, 'doctor_profile')
+        is_patient = hasattr(request.user, 'patient_profile')
+        
+        if not is_doctor and not is_patient:
+            return Response(
+                {'error': 'User profile not found. Please complete your profile setup.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        if is_doctor:
+            workspace = DoctorPatientWorkspace.objects.get(
+                id=workspace_id,
+                doctor=request.user.doctor_profile,
+                status='active'
+            )
+        elif is_patient:
+            workspace = DoctorPatientWorkspace.objects.get(
+                id=workspace_id,
+                patient=request.user.patient_profile,
+                status='active'
+            )
+        
+        # Get reports for this workspace
+        reports = MedicalReport.objects.filter(
+            workspace=workspace
+        ).select_related('patient').order_by('-uploaded_at')
+        
+        # Apply filters
+        report_type = request.query_params.get('report_type')
+        status_filter = request.query_params.get('status')
+        is_critical = request.query_params.get('is_critical')
+        
+        if report_type:
+            reports = reports.filter(report_type=report_type)
+        if status_filter:
+            reports = reports.filter(status=status_filter)
+        if is_critical:
+            reports = reports.filter(is_critical=is_critical.lower() == 'true')
+        
+        # Serialize
+        serializer = MedicalReportListSerializer(reports, many=True, context={'request': request})
+        
+        return Response({
+            'count': reports.count(),
+            'reports': serializer.data
+        }, status=status.HTTP_200_OK)
+    
+    except DoctorPatientWorkspace.DoesNotExist:
+        return Response(
+            {'error': 'Workspace not found or access denied'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET', 'PATCH'])
+@authentication_classes([TokenAuthentication, SessionAuthentication])
+@permission_classes([permissions.IsAuthenticated])
+def medical_report_detail(request, workspace_id, report_id):
+    """
+    Get or update a specific medical report
+    Patients can update basic info, doctors can review and add notes
+    """
+    try:
+        # Determine user role
+        is_doctor = hasattr(request.user, 'doctor_profile')
+        is_patient = hasattr(request.user, 'patient_profile')
+        
+        if not is_doctor and not is_patient:
+            return Response(
+                {'error': 'User profile not found. Please complete your profile setup.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        if is_doctor:
+            workspace = DoctorPatientWorkspace.objects.get(
+                id=workspace_id,
+                doctor=request.user.doctor_profile,
+                status='active'
+            )
+        elif is_patient:
+            workspace = DoctorPatientWorkspace.objects.get(
+                id=workspace_id,
+                patient=request.user.patient_profile,
+                status='active'
+            )
+        
+        # Get report
+        report = MedicalReport.objects.get(
+            id=report_id,
+            workspace=workspace
+        )
+        
+        if request.method == 'GET':
+            serializer = MedicalReportDetailSerializer(report, context={'request': request})
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        
+        elif request.method == 'PATCH':
+            serializer = MedicalReportUpdateSerializer(
+                report,
+                data=request.data,
+                partial=True,
+                context={'request': request}
+            )
+            
+            if serializer.is_valid():
+                serializer.save()
+                
+                # If doctor marked as reviewed, update status and create timeline
+                if is_doctor and request.data.get('reviewed_by_doctor'):
+                    report.status = 'reviewed'
+                    report.save()
+                    
+                    DoctorPatientTimelineEntry.objects.create(
+                        workspace=workspace,
+                        entry_type='diagnostic',
+                        title=f'Report Reviewed: {report.title}',
+                        summary=f'Dr. {workspace.doctor.display_name or workspace.doctor.full_name} reviewed the medical report',
+                        details=report.doctor_notes if report.doctor_notes else 'Doctor has reviewed this report',
+                        created_by='doctor',
+                        visibility='patient',
+                        is_critical=report.is_critical,
+                        meta={'report_id': report.id, 'report_type': report.report_type}
+                    )
+                
+                response_serializer = MedicalReportDetailSerializer(report, context={'request': request})
+                return Response(response_serializer.data, status=status.HTTP_200_OK)
+            
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    except DoctorPatientWorkspace.DoesNotExist:
+        return Response(
+            {'error': 'Workspace not found or access denied'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except MedicalReport.DoesNotExist:
+        return Response(
+            {'error': 'Medical report not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@authentication_classes([TokenAuthentication, SessionAuthentication])
+@permission_classes([permissions.IsAuthenticated])
+def add_report_comment(request, workspace_id, report_id):
+    """
+    Add a comment to a medical report
+    Both patient and doctor can add comments
+    """
+    try:
+        # Determine user role
+        is_doctor = hasattr(request.user, 'doctor_profile')
+        is_patient = hasattr(request.user, 'patient_profile')
+        
+        if not is_doctor and not is_patient:
+            return Response(
+                {'error': 'User profile not found. Please complete your profile setup.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        if is_doctor:
+            workspace = DoctorPatientWorkspace.objects.get(
+                id=workspace_id,
+                doctor=request.user.doctor_profile,
+                status='active'
+            )
+        elif is_patient:
+            workspace = DoctorPatientWorkspace.objects.get(
+                id=workspace_id,
+                patient=request.user.patient_profile,
+                status='active'
+            )
+        
+        # Get report
+        report = MedicalReport.objects.get(
+            id=report_id,
+            workspace=workspace
+        )
+        
+        # Create comment
+        comment_text = request.data.get('comment')
+        if not comment_text:
+            return Response(
+                {'error': 'Comment text is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        comment = ReportComment.objects.create(
+            report=report,
+            author_user=request.user,
+            author_type='doctor' if is_doctor else 'patient',
+            comment=comment_text,
+            is_internal=request.data.get('is_internal', False) if is_doctor else False
+        )
+        
+        # Create timeline entry
+        user_name = (
+            workspace.doctor.display_name or workspace.doctor.full_name
+            if is_doctor
+            else workspace.patient.full_name
+        )
+        
+        DoctorPatientTimelineEntry.objects.create(
+            workspace=workspace,
+            entry_type='update',
+            title=f'Comment on Report: {report.title}',
+            summary=f'{user_name} added a comment',
+            details=comment_text[:500],
+            created_by='doctor' if is_doctor else 'patient',
+            visibility='patient' if not comment.is_internal else 'internal',
+            meta={'report_id': report.id, 'comment_id': comment.id}
+        )
+        
+        serializer = ReportCommentSerializer(comment)
+        
+        return Response({
+            'message': 'Comment added successfully',
+            'comment': serializer.data
+        }, status=status.HTTP_201_CREATED)
+    
+    except DoctorPatientWorkspace.DoesNotExist:
+        return Response(
+            {'error': 'Workspace not found or access denied'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except MedicalReport.DoesNotExist:
+        return Response(
+            {'error': 'Medical report not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )

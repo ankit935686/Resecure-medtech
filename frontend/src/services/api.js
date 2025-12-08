@@ -407,6 +407,114 @@ const api = {
       const response = await apiClient.delete(`/doctor/intake-forms/${formId}/delete/`);
       return response.data;
     },
+
+    // Medical Reports (Doctor Side)
+    getMedicalReports: async (workspaceId, params = {}) => {
+      // GET /api/doctor/workspaces/<id>/reports/
+      const response = await apiClient.get(`/doctor/workspaces/${workspaceId}/reports/`, { params });
+      return response.data;
+    },
+
+    getMedicalReportDetail: async (workspaceId, reportId) => {
+      // GET /api/doctor/workspaces/<id>/reports/<report_id>/
+      const response = await apiClient.get(`/doctor/workspaces/${workspaceId}/reports/${reportId}/`);
+      return response.data;
+    },
+
+    updateMedicalReport: async (workspaceId, reportId, data) => {
+      // PATCH /api/doctor/workspaces/<id>/reports/<report_id>/
+      await api.core.getCsrfToken();
+      const response = await apiClient.patch(`/doctor/workspaces/${workspaceId}/reports/${reportId}/`, data);
+      return response.data;
+    },
+
+    addReportComment: async (workspaceId, reportId, comment) => {
+      // POST /api/doctor/workspaces/<id>/reports/<report_id>/comment/
+      await api.core.getCsrfToken();
+      const response = await apiClient.post(`/doctor/workspaces/${workspaceId}/reports/${reportId}/comment/`, { comment });
+      return response.data;
+    },
+
+    // Medical History (Doctor Side)
+    getMedicalHistory: async (workspaceId, params = {}) => {
+      // GET /api/patientHistory/doctor/workspace/<workspace_id>/history/
+      const response = await apiClient.get(`/patientHistory/doctor/workspace/${workspaceId}/history/`, { params });
+      return response.data;
+    },
+
+    getMedicalHistorySummary: async (workspaceId) => {
+      // GET /api/patientHistory/doctor/workspace/<workspace_id>/history/summary/
+      const response = await apiClient.get(`/patientHistory/doctor/workspace/${workspaceId}/history/summary/`);
+      return response.data;
+    },
+
+    getClinicalSummary: async (workspaceId) => {
+      // GET /api/patientHistory/doctor/workspace/<workspace_id>/history/clinical-summary/
+      const response = await apiClient.get(`/patientHistory/doctor/workspace/${workspaceId}/history/clinical-summary/`);
+      return response.data;
+    },
+
+    getMedicalHistoryByCategory: async (workspaceId, category, params = {}) => {
+      // GET /api/patientHistory/doctor/workspace/<workspace_id>/history/<category>/
+      const response = await apiClient.get(`/patientHistory/doctor/workspace/${workspaceId}/history/${category}/`, { params });
+      return response.data;
+    },
+
+    addMedicalHistoryEntry: async (data) => {
+      // POST /api/patientHistory/doctor/history/add/
+      await api.core.getCsrfToken();
+      const response = await apiClient.post('/patientHistory/doctor/history/add/', data);
+      return response.data;
+    },
+
+    updateMedicalHistoryEntry: async (entryId, data) => {
+      // PUT /api/patientHistory/doctor/history/<id>/update/
+      await api.core.getCsrfToken();
+      const response = await apiClient.put(`/patientHistory/doctor/history/${entryId}/update/`, data);
+      return response.data;
+    },
+
+    verifyMedicalHistoryEntry: async (entryId) => {
+      // POST /api/patientHistory/doctor/history/<id>/verify/
+      await api.core.getCsrfToken();
+      const response = await apiClient.post(`/patientHistory/doctor/history/${entryId}/verify/`);
+      return response.data;
+    },
+
+    deleteMedicalHistoryEntry: async (entryId) => {
+      // DELETE /api/patientHistory/doctor/history/<id>/delete/
+      await api.core.getCsrfToken();
+      const response = await apiClient.delete(`/patientHistory/doctor/history/${entryId}/delete/`);
+      return response.data;
+    },
+
+    getMedicalHistoryTimeline: async (entryId) => {
+      // GET /api/patientHistory/doctor/history/<id>/timeline/
+      const response = await apiClient.get(`/patientHistory/doctor/history/${entryId}/timeline/`);
+      return response.data;
+    },
+
+    bulkImportMedicalHistory: async (data) => {
+      // POST /api/patientHistory/doctor/history/bulk-import/
+      await api.core.getCsrfToken();
+      const response = await apiClient.post('/patientHistory/doctor/history/bulk-import/', data);
+      return response.data;
+    },
+
+    // Integration triggers
+    importFromIntakeForm: async (formId) => {
+      // POST /api/patientHistory/integration/import-intake-form/<form_id>/
+      await api.core.getCsrfToken();
+      const response = await apiClient.post(`/patientHistory/integration/import-intake-form/${formId}/`);
+      return response.data;
+    },
+
+    importFromMedicalReport: async (reportId) => {
+      // POST /api/patientHistory/integration/import-medical-report/<report_id>/
+      await api.core.getCsrfToken();
+      const response = await apiClient.post(`/patientHistory/integration/import-medical-report/${reportId}/`);
+      return response.data;
+    },
   },
 
   // ==================== ADMIN API ====================
@@ -690,6 +798,100 @@ const api = {
     getDashboardSummary: async () => {
       // GET /api/patient/dashboard/summary/
       const response = await apiClient.get('/patient/dashboard/summary/');
+      return response.data;
+    },
+
+    // Medical Reports (Patient Side)
+    uploadMedicalReport: async (workspaceId, formData) => {
+      // POST /api/patient/workspaces/<id>/reports/upload/
+      await api.core.getCsrfToken();
+      const response = await apiClient.post(`/patient/workspaces/${workspaceId}/reports/upload/`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      return response.data;
+    },
+
+    getMedicalReports: async (workspaceId, params = {}) => {
+      // GET /api/patient/workspaces/<id>/reports/
+      const response = await apiClient.get(`/patient/workspaces/${workspaceId}/reports/`, { params });
+      return response.data;
+    },
+
+    getMedicalReportDetail: async (workspaceId, reportId) => {
+      // GET /api/patient/workspaces/<id>/reports/<report_id>/
+      const response = await apiClient.get(`/patient/workspaces/${workspaceId}/reports/${reportId}/`);
+      return response.data;
+    },
+
+    updateMedicalReport: async (workspaceId, reportId, data) => {
+      // PATCH /api/patient/workspaces/<id>/reports/<report_id>/
+      await api.core.getCsrfToken();
+      const response = await apiClient.patch(`/patient/workspaces/${workspaceId}/reports/${reportId}/`, data);
+      return response.data;
+    },
+
+    addReportComment: async (workspaceId, reportId, comment) => {
+      // POST /api/patient/workspaces/<id>/reports/<report_id>/comment/
+      await api.core.getCsrfToken();
+      const response = await apiClient.post(`/patient/workspaces/${workspaceId}/reports/${reportId}/comment/`, { comment });
+      return response.data;
+    },
+
+    // Medical History (Patient Side)
+    getMedicalHistory: async (params = {}) => {
+      // GET /api/patientHistory/patient/my-history/
+      const response = await apiClient.get('/patientHistory/patient/my-history/', { params });
+      return response.data;
+    },
+
+    getMedicalHistorySummary: async () => {
+      // GET /api/patientHistory/patient/my-history/summary/
+      const response = await apiClient.get('/patientHistory/patient/my-history/summary/');
+      return response.data;
+    },
+
+    getMedicalHistoryDashboard: async () => {
+      // GET /api/patientHistory/patient/my-history/dashboard/
+      const response = await apiClient.get('/patientHistory/patient/my-history/dashboard/');
+      return response.data;
+    },
+
+    getHealthOverview: async () => {
+      // GET /api/patientHistory/patient/my-history/health-overview/
+      const response = await apiClient.get('/patientHistory/patient/my-history/health-overview/');
+      return response.data;
+    },
+
+    getMedicalHistoryByCategory: async (category, params = {}) => {
+      // GET /api/patientHistory/patient/my-history/<category>/
+      const response = await apiClient.get(`/patientHistory/patient/my-history/${category}/`, { params });
+      return response.data;
+    },
+
+    addMedicalHistoryEntry: async (data) => {
+      // POST /api/patientHistory/patient/history/add/
+      await api.core.getCsrfToken();
+      const response = await apiClient.post('/patientHistory/patient/history/add/', data);
+      return response.data;
+    },
+
+    updateMedicalHistoryEntry: async (entryId, data) => {
+      // PUT /api/patientHistory/patient/history/<id>/update/
+      await api.core.getCsrfToken();
+      const response = await apiClient.put(`/patientHistory/patient/history/${entryId}/update/`, data);
+      return response.data;
+    },
+
+    deleteMedicalHistoryEntry: async (entryId) => {
+      // DELETE /api/patientHistory/patient/history/<id>/delete/
+      await api.core.getCsrfToken();
+      const response = await apiClient.delete(`/patientHistory/patient/history/${entryId}/delete/`);
+      return response.data;
+    },
+
+    getMedicalHistoryTimeline: async (entryId) => {
+      // GET /api/patientHistory/patient/history/<id>/timeline/
+      const response = await apiClient.get(`/patientHistory/patient/history/${entryId}/timeline/`);
       return response.data;
     },
   },

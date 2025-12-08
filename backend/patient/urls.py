@@ -50,5 +50,11 @@ urlpatterns = [
     
     # Dashboard Summary endpoint
     path('dashboard/summary/', views.patient_dashboard_summary, name='patient-dashboard-summary'),
+    
+    # Medical Report Management endpoints
+    path('workspaces/<int:workspace_id>/reports/upload/', views.upload_medical_report, name='upload-medical-report'),
+    path('workspaces/<int:workspace_id>/reports/', views.list_medical_reports, name='list-medical-reports'),
+    path('workspaces/<int:workspace_id>/reports/<int:report_id>/', views.medical_report_detail, name='medical-report-detail'),
+    path('workspaces/<int:workspace_id>/reports/<int:report_id>/comment/', views.add_report_comment, name='add-report-comment'),
 ]
 

@@ -16,8 +16,13 @@ import {
   Clock,
   CheckCircle,
   Send,
+  Upload,
 } from 'lucide-react';
 import api from '../../services/api';
+import MedicalReportUpload from '../../components/MedicalReportUpload';
+import MedicalReportsList from '../../components/MedicalReportsList';
+import MedicalReportDetail from '../../components/MedicalReportDetail';
+import MedicalHistoryDashboard from '../../components/MedicalHistoryDashboard';
 
 const entryIcons = {
   treatment: ClipboardList,
@@ -44,6 +49,10 @@ export default function PatientWorkspace() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [intakeForms, setIntakeForms] = useState([]);
+  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [selectedReport, setSelectedReport] = useState(null);
+  const [showReportDetail, setShowReportDetail] = useState(false);
+  const [activeSection, setActiveSection] = useState('overview'); // overview, medical-history, or reports
 
   useEffect(() => {
     const fetchWorkspace = async () => {
@@ -204,6 +213,93 @@ export default function PatientWorkspace() {
           </div>
         </div>
 
+        {/* Section Toggle */}
+        <div className="flex items-center gap-3 mb-6">
+          <button
+            onClick={() => setActiveSection('overview')}
+            className={`px-6 py-3 rounded-xl font-semibold transition-all ${
+              activeSection === 'overview'
+                ? 'bg-white text-blue-600 shadow-lg'
+                : 'bg-white/60 text-gray-600 hover:bg-white'
+            }`}
+          >
+            Care Plan Overview
+          </button>
+          <button
+            onClick={() => setActiveSection('medical-history')}
+            className={`px-6 py-3 rounded-xl font-semibold transition-all flex items-center gap-2 ${
+              activeSection === 'medical-history'
+                ? 'bg-white text-indigo-600 shadow-lg'
+                : 'bg-white/60 text-gray-600 hover:bg-white'
+            }`}
+          >
+            <Activity className="w-5 h-5" />
+            Medical History
+          </button>
+          <button
+            onClick={() => setActiveSection('reports')}
+            className={`px-6 py-3 rounded-xl font-semibold transition-all flex items-center gap-2 ${
+              activeSection === 'reports'
+                ? 'bg-white text-purple-600 shadow-lg'
+                : 'bg-white/60 text-gray-600 hover:bg-white'
+            }`}
+          >
+            <FileText className="w-5 h-5" />
+            Medical Reports
+          </button>
+        </div>
+
+        {/* Medical History Section */}
+        {activeSection === 'medical-history' && (
+          <div className="space-y-6">
+            <div className="bg-white rounded-3xl shadow-xl p-6">
+              <MedicalHistoryDashboard
+                workspaceId={connectionId}
+                userRole="patient"
+                onAddEntry={() => {}}
+                onEditEntry={(entry) => {}}
+                onDeleteEntry={(entry) => {}}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Medical Reports Section */}
+        {activeSection === 'reports' && (
+          <div className="space-y-6">
+            <div className="bg-white rounded-3xl shadow-xl p-6">
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h3 className="text-2xl font-bold text-gray-900">Medical Reports & Documents</h3>
+                  <p className="text-gray-600 mt-1">Upload and manage your medical reports with automatic OCR and AI analysis</p>
+                </div>
+                <button
+                  onClick={() => setShowUploadModal(true)}
+                  className="px-6 py-3 bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all flex items-center gap-2"
+                >
+                  <Upload className="w-5 h-5" />
+                  Upload Report
+                </button>
+              </div>
+
+              <MedicalReportsList
+                workspaceId={connectionId}
+                onViewReport={(report) => {
+                  setSelectedReport(report);
+                  setShowReportDetail(true);
+                }}
+                onAddComment={(report) => {
+                  setSelectedReport(report);
+                  setShowReportDetail(true);
+                }}
+                userRole="patient"
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Care Plan Overview Section */}
+        {activeSection === 'overview' && (
         <div className="grid lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-6">
             <div className="grid sm:grid-cols-2 gap-4">
@@ -391,7 +487,36 @@ export default function PatientWorkspace() {
             </div>
           </div>
         </div>
+        )}
       </div>
+
+      {/* Upload Modal */}
+      {showUploadModal && (
+        <MedicalReportUpload
+          workspaceId={connectionId}
+          onSuccess={() => {
+            setShowUploadModal(false);
+            // Trigger refresh of reports list
+          }}
+          onClose={() => setShowUploadModal(false)}
+        />
+      )}
+
+      {/* Report Detail Modal */}
+      {showReportDetail && selectedReport && (
+        <MedicalReportDetail
+          report={selectedReport}
+          workspaceId={connectionId}
+          onClose={() => {
+            setShowReportDetail(false);
+            setSelectedReport(null);
+          }}
+          onUpdate={() => {
+            // Trigger refresh of reports list
+          }}
+          userRole="patient"
+        />
+      )}
     </div>
   );
 }

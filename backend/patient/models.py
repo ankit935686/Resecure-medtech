@@ -6,6 +6,7 @@ from django.utils import timezone
 import datetime
 import secrets
 import hashlib
+import os
 
 
 class PatientProfile(models.Model):
@@ -665,3 +666,226 @@ def create_timeline_entry_on_form_sent(sender, instance, created, **kwargs):
         
         # Clean up tracker
         del _form_status_tracker[instance.pk]
+
+
+# ===========================
+# Medical Report Models
+# ===========================
+
+class MedicalReport(models.Model):
+    """Model for patient medical reports with OCR and AI analysis"""
+    
+    REPORT_TYPE_CHOICES = [
+        ('lab_report', 'Lab Report'),
+        ('xray', 'X-Ray'),
+        ('mri', 'MRI'),
+        ('ct_scan', 'CT Scan'),
+        ('ultrasound', 'Ultrasound'),
+        ('prescription', 'Prescription'),
+        ('discharge_summary', 'Discharge Summary'),
+        ('consultation', 'Consultation Notes'),
+        ('vaccination', 'Vaccination Record'),
+        ('blood_test', 'Blood Test'),
+        ('pathology', 'Pathology Report'),
+        ('radiology', 'Radiology Report'),
+        ('other', 'Other Medical Document'),
+    ]
+    
+    STATUS_CHOICES = [
+        ('uploaded', 'Uploaded'),
+        ('processing', 'Processing OCR'),
+        ('ocr_complete', 'OCR Complete'),
+        ('ai_analyzing', 'AI Analyzing'),
+        ('ready_for_review', 'Ready for Doctor Review'),
+        ('reviewed', 'Reviewed by Doctor'),
+    ]
+    
+    # Basic Information
+    workspace = models.ForeignKey(
+        DoctorPatientWorkspace,
+        on_delete=models.CASCADE,
+        related_name='medical_reports'
+    )
+    patient = models.ForeignKey(
+        PatientProfile,
+        on_delete=models.CASCADE,
+        related_name='medical_reports'
+    )
+    
+    # Report Details
+    report_type = models.CharField(max_length=50, choices=REPORT_TYPE_CHOICES, default='other')
+    title = models.CharField(max_length=255, help_text='Brief title for the report')
+    description = models.TextField(blank=True, help_text='Patient notes about this report')
+    report_date = models.DateField(help_text='Date of the actual report/test')
+    
+    # File Information
+    file = models.FileField(
+        upload_to='medical_reports/%Y/%m/',
+        help_text='Upload medical report (PDF, Image, or Document)'
+    )
+    file_name = models.CharField(max_length=255, blank=True)
+    file_size = models.IntegerField(default=0, help_text='File size in bytes')
+    file_type = models.CharField(max_length=100, blank=True)
+    
+    # Status and Workflow
+    status = models.CharField(max_length=30, choices=STATUS_CHOICES, default='uploaded')
+    
+    # OCR Processing
+    ocr_processed = models.BooleanField(default=False)
+    ocr_text = models.TextField(blank=True, help_text='Raw text extracted from document')
+    ocr_confidence = models.FloatField(default=0.0, help_text='OCR confidence score (0-1)')
+    ocr_processed_at = models.DateTimeField(null=True, blank=True)
+    
+    # Structured Medical Data
+    extracted_medications = models.JSONField(
+        blank=True,
+        null=True,
+        help_text='List of medications extracted from report'
+    )
+    extracted_diagnoses = models.JSONField(
+        blank=True,
+        null=True,
+        help_text='List of diagnoses/conditions extracted'
+    )
+    extracted_vitals = models.JSONField(
+        blank=True,
+        null=True,
+        help_text='Vital signs extracted (BP, HR, temp, etc.)'
+    )
+    extracted_test_results = models.JSONField(
+        blank=True,
+        null=True,
+        help_text='Lab test results with values and ranges'
+    )
+    extracted_allergies = models.JSONField(
+        blank=True,
+        null=True,
+        help_text='Allergies mentioned in the report'
+    )
+    
+    # AI Analysis
+    ai_processed = models.BooleanField(default=False)
+    ai_summary = models.TextField(blank=True, help_text='AI-generated summary of the report')
+    ai_key_findings = models.JSONField(
+        blank=True,
+        null=True,
+        help_text='Key findings identified by AI'
+    )
+    ai_recommendations = models.TextField(blank=True, help_text='AI recommendations for doctor')
+    ai_processed_at = models.DateTimeField(null=True, blank=True)
+    ai_raw_response = models.JSONField(
+        blank=True,
+        null=True,
+        help_text='Full raw response from AI analysis'
+    )
+    
+    # Doctor Review
+    reviewed_by_doctor = models.BooleanField(default=False)
+    doctor_notes = models.TextField(blank=True, help_text='Doctor\'s notes about this report')
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    is_critical = models.BooleanField(
+        default=False,
+        help_text='Mark if report contains critical findings'
+    )
+    requires_action = models.BooleanField(
+        default=False,
+        help_text='Mark if report requires immediate action'
+    )
+    
+    # Timestamps
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-report_date', '-uploaded_at']
+        verbose_name = 'Medical Report'
+        verbose_name_plural = 'Medical Reports'
+        indexes = [
+            models.Index(fields=['patient', '-report_date']),
+            models.Index(fields=['workspace', '-uploaded_at']),
+            models.Index(fields=['status']),
+            models.Index(fields=['report_type']),
+        ]
+    
+    def __str__(self):
+        return f"{self.title} - {self.patient.full_name} ({self.report_date})"
+    
+    @property
+    def file_extension(self):
+        """Get file extension"""
+        if self.file:
+            return os.path.splitext(self.file.name)[1].lower()
+        return ''
+    
+    @property
+    def is_image(self):
+        """Check if file is an image"""
+        image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff']
+        return self.file_extension in image_extensions
+    
+    @property
+    def is_pdf(self):
+        """Check if file is a PDF"""
+        return self.file_extension == '.pdf'
+    
+    def save(self, *args, **kwargs):
+        if self.file:
+            self.file_name = self.file.name
+            self.file_size = self.file.size
+        super().save(*args, **kwargs)
+
+
+class ReportComment(models.Model):
+    """Comments/communication about medical reports between patient and doctor"""
+    
+    report = models.ForeignKey(
+        MedicalReport,
+        on_delete=models.CASCADE,
+        related_name='comments'
+    )
+    author_type = models.CharField(
+        max_length=10,
+        choices=[('patient', 'Patient'), ('doctor', 'Doctor')]
+    )
+    author_user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='report_comments',
+        null=True,
+        blank=True
+    )
+    comment = models.TextField()
+    is_internal = models.BooleanField(
+        default=False,
+        help_text='Internal doctor notes (not visible to patient)'
+    )
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['created_at']
+        verbose_name = 'Report Comment'
+        verbose_name_plural = 'Report Comments'
+    
+    def __str__(self):
+        return f"Comment by {self.author_type} on {self.report.title}"
+
+
+# Signal handler for medical report upload
+@receiver(post_save, sender=MedicalReport)
+def create_timeline_entry_on_report_upload(sender, instance, created, **kwargs):
+    """Create timeline entry when patient uploads a medical report"""
+    if created:
+        DoctorPatientTimelineEntry.objects.create(
+            workspace=instance.workspace,
+            entry_type='update',
+            title=f'New Medical Report: {instance.title}',
+            summary=f'{instance.patient.full_name} uploaded a new {instance.get_report_type_display()}',
+            details=f'Report: {instance.title}\nType: {instance.get_report_type_display()}\nDate: {instance.report_date}\n\nDescription: {instance.description if instance.description else "No description provided"}',
+            visibility='patient',
+            created_by='patient',
+            is_critical=instance.is_critical,
+            highlight_color='green',
+            meta={'report_id': instance.id, 'report_type': instance.report_type}
+        )
