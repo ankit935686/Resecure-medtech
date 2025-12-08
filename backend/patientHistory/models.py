@@ -63,7 +63,7 @@ class MedicalHistoryEntry(models.Model):
     # Date fields
     start_date = models.DateField(null=True, blank=True, help_text='When it started/was diagnosed')
     end_date = models.DateField(null=True, blank=True, help_text='When it ended/was resolved')
-    recorded_date = models.DateField(auto_now_add=True)
+    recorded_date = models.DateField(auto_now_add=True, null=True, blank=True)
     
     # Source tracking
     source_reference_id = models.CharField(
@@ -88,6 +88,30 @@ class MedicalHistoryEntry(models.Model):
         default=dict,
         blank=True,
         help_text='Category-specific structured data'
+    )
+    
+    # Trending & Intelligence (NEW)
+    trending_direction = models.CharField(
+        max_length=20,
+        choices=[
+            ('improving', 'Improving'),
+            ('worsening', 'Worsening'),
+            ('stable', 'Stable'),
+            ('unknown', 'Unknown')
+        ],
+        default='unknown',
+        blank=True,
+        help_text='Trend analysis for trackable parameters'
+    )
+    last_value = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text='Most recent value (for lab results/vitals)'
+    )
+    ai_analysis = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text='AI-generated insights for this specific entry'
     )
     
     # Metadata
@@ -241,6 +265,42 @@ class MedicalHistorySummary(models.Model):
         help_text='Percentage of expected history fields filled (0-100)'
     )
     
+    # AI-Generated Clinical Intelligence (NEW)
+    ai_clinical_summary = models.TextField(
+        blank=True,
+        help_text='Groq AI-generated comprehensive clinical summary'
+    )
+    ai_risk_assessment = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text='AI-identified risk factors with severity levels'
+    )
+    ai_trends_detected = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='List of trends detected by AI (improving/worsening parameters)'
+    )
+    ai_focus_points = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='AI-suggested focus points for doctor attention'
+    )
+    ai_last_generated = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text='When AI summary was last generated'
+    )
+    
+    # Quick Stats Enhancement (NEW)
+    unverified_entries_count = models.IntegerField(
+        default=0,
+        help_text='Count of entries not yet verified by doctor'
+    )
+    critical_alerts_count = models.IntegerField(
+        default=0,
+        help_text='Count of critical items requiring attention'
+    )
+    
     # Timestamps
     last_updated = models.DateTimeField(auto_now=True)
     
@@ -306,4 +366,234 @@ class MedicalHistorySummary(models.Model):
         ])
         self.completeness_score = int((filled_fields / expected_fields) * 100)
         
+        # Update unverified and critical counts
+        self.unverified_entries_count = entries.filter(verified_by_doctor=False).count()
+        self.critical_alerts_count = entries.filter(is_critical=True, status='active').count()
+        
         self.save()
+    
+    def generate_ai_summary(self):
+        """Generate AI clinical summary using Groq API"""
+        from .ai_service import PatientHistoryAIService
+        from django.utils import timezone
+        
+        ai_service = PatientHistoryAIService(self.workspace)
+        result = ai_service.generate_clinical_summary()
+        
+        if result:
+            self.ai_clinical_summary = result.get('clinical_summary', '')
+            self.ai_risk_assessment = result.get('risk_assessment', {})
+            self.ai_trends_detected = result.get('trends_detected', [])
+            self.ai_focus_points = result.get('focus_points', [])
+            self.ai_last_generated = timezone.now()
+            self.save()
+        
+        return result
+    
+    def get_lab_trends(self, test_name):
+        """Get trending data for specific lab test"""
+        entries = self.workspace.medical_history_entries.filter(
+            category='lab_result',
+            title__icontains=test_name
+        ).order_by('start_date')
+        
+        data_points = []
+        for entry in entries:
+            if entry.last_value:
+                data_points.append({
+                    'date': entry.start_date.isoformat() if entry.start_date else None,
+                    'value': entry.last_value,
+                    'unit': entry.category_data.get('unit', ''),
+                    'is_abnormal': entry.category_data.get('is_abnormal', False)
+                })
+        
+        return data_points
+
+
+class ClinicalTrend(models.Model):
+    """Track trends for specific medical parameters over time (lab values, vitals, etc.)"""
+    
+    TREND_TYPE_CHOICES = [
+        ('lab_value', 'Lab Value'),
+        ('vital_sign', 'Vital Sign'),
+        ('symptom_severity', 'Symptom Severity'),
+        ('medication_response', 'Medication Response'),
+    ]
+    
+    TREND_DIRECTION_CHOICES = [
+        ('improving', 'Improving'),
+        ('worsening', 'Worsening'),
+        ('stable', 'Stable'),
+        ('fluctuating', 'Fluctuating'),
+        ('unknown', 'Unknown'),
+    ]
+    
+    workspace = models.ForeignKey(
+        DoctorPatientWorkspace,
+        on_delete=models.CASCADE,
+        related_name='clinical_trends'
+    )
+    patient = models.ForeignKey(
+        PatientProfile,
+        on_delete=models.CASCADE,
+        related_name='clinical_trends'
+    )
+    
+    # What we're tracking
+    trend_type = models.CharField(
+        max_length=50,
+        choices=TREND_TYPE_CHOICES,
+        help_text='Type of parameter being tracked'
+    )
+    parameter_name = models.CharField(
+        max_length=100,
+        help_text='Name of parameter (e.g., HbA1c, Blood Pressure, Glucose)'
+    )
+    parameter_unit = models.CharField(
+        max_length=20,
+        blank=True,
+        help_text='Unit of measurement (e.g., %, mg/dL, mmHg)'
+    )
+    
+    # Time series data
+    data_points = models.JSONField(
+        default=list,
+        help_text='Array of {date, value, is_abnormal, source} objects'
+    )
+    
+    # Reference range
+    reference_range_min = models.FloatField(null=True, blank=True)
+    reference_range_max = models.FloatField(null=True, blank=True)
+    reference_range_text = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text='Text representation of reference range'
+    )
+    
+    # Analysis
+    trend_direction = models.CharField(
+        max_length=20,
+        choices=TREND_DIRECTION_CHOICES,
+        default='unknown'
+    )
+    latest_value = models.CharField(max_length=100, blank=True)
+    latest_value_date = models.DateField(null=True, blank=True)
+    is_currently_abnormal = models.BooleanField(default=False)
+    
+    ai_interpretation = models.TextField(
+        blank=True,
+        help_text='AI-generated interpretation of the trend'
+    )
+    clinical_significance = models.TextField(
+        blank=True,
+        help_text='Clinical significance of this trend'
+    )
+    
+    # Metadata
+    last_analyzed = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    # Linked history entries
+    related_entries = models.ManyToManyField(
+        MedicalHistoryEntry,
+        blank=True,
+        related_name='trends'
+    )
+    
+    class Meta:
+        ordering = ['-last_analyzed']
+        verbose_name = 'Clinical Trend'
+        verbose_name_plural = 'Clinical Trends'
+        unique_together = ['workspace', 'parameter_name']
+        indexes = [
+            models.Index(fields=['workspace', 'parameter_name']),
+            models.Index(fields=['patient', 'trend_type']),
+        ]
+    
+    def __str__(self):
+        return f"{self.patient.full_name} - {self.parameter_name} Trend"
+    
+    def add_data_point(self, date, value, is_abnormal=False, source=''):
+        """Add a new data point to the trend"""
+        new_point = {
+            'date': date.isoformat() if hasattr(date, 'isoformat') else str(date),
+            'value': str(value),
+            'is_abnormal': is_abnormal,
+            'source': source
+        }
+        
+        # Check if data point already exists for this date
+        existing_dates = [point.get('date') for point in self.data_points]
+        if new_point['date'] not in existing_dates:
+            self.data_points.append(new_point)
+            self.data_points.sort(key=lambda x: x['date'])
+            
+            # Update latest value
+            self.latest_value = str(value)
+            self.latest_value_date = date if hasattr(date, 'isoformat') else None
+            self.is_currently_abnormal = is_abnormal
+            
+            self.save()
+    
+    def analyze_trend(self):
+        """Analyze the trend direction based on data points"""
+        if len(self.data_points) < 2:
+            self.trend_direction = 'unknown'
+            self.save()
+            return
+        
+        # Get numeric values (if possible)
+        try:
+            values = [float(point['value']) for point in self.data_points if point.get('value')]
+            
+            if len(values) < 2:
+                self.trend_direction = 'unknown'
+            else:
+                # Simple linear trend detection
+                first_half_avg = sum(values[:len(values)//2]) / (len(values)//2)
+                second_half_avg = sum(values[len(values)//2:]) / (len(values) - len(values)//2)
+                
+                diff_percentage = ((second_half_avg - first_half_avg) / first_half_avg) * 100
+                
+                # For lab values, determine if increasing is good or bad
+                # (This is simplified - in production, you'd have parameter-specific logic)
+                if abs(diff_percentage) < 5:
+                    self.trend_direction = 'stable'
+                elif diff_percentage > 10:
+                    # Increasing - check if it's moving away from or toward normal
+                    if self.is_currently_abnormal:
+                        self.trend_direction = 'worsening'
+                    else:
+                        self.trend_direction = 'improving'
+                elif diff_percentage < -10:
+                    # Decreasing
+                    if self.is_currently_abnormal:
+                        self.trend_direction = 'improving'
+                    else:
+                        self.trend_direction = 'worsening'
+                else:
+                    self.trend_direction = 'fluctuating'
+                    
+        except (ValueError, TypeError, ZeroDivisionError):
+            self.trend_direction = 'unknown'
+        
+        self.save()
+    
+    def generate_ai_interpretation(self):
+        """Generate AI interpretation of this trend using Groq"""
+        from .ai_service import PatientHistoryAIService
+        
+        ai_service = PatientHistoryAIService(self.workspace)
+        interpretation = ai_service.analyze_parameter_trend(
+            parameter_name=self.parameter_name,
+            data_points=self.data_points,
+            reference_range=self.reference_range_text,
+            current_abnormal=self.is_currently_abnormal
+        )
+        
+        if interpretation:
+            self.ai_interpretation = interpretation.get('interpretation', '')
+            self.clinical_significance = interpretation.get('clinical_significance', '')
+            self.save()
+        
+        return interpretation

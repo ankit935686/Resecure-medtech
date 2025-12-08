@@ -66,6 +66,18 @@ urlpatterns = [
         name='import-from-medical-report'
     ),
     
+    # Auto-sync endpoints
+    path(
+        'workspace/<int:workspace_id>/auto-sync/',
+        views.auto_sync_workspace,
+        name='auto-sync-workspace'
+    ),
+    path(
+        'workspace/<int:workspace_id>/sync-status/',
+        views.get_sync_status,
+        name='get-sync-status'
+    ),
+    
     # Patient endpoints - Medical History Management
     path(
         'patient/my-history/',
@@ -111,5 +123,42 @@ urlpatterns = [
         'patient/history/<int:entry_id>/timeline/',
         views.patient_get_entry_timeline,
         name='patient-history-timeline'
+    ),
+    
+    # ==================== NEW ENHANCED ENDPOINTS ====================
+    
+    # Unified Timeline - Merges all data sources
+    path(
+        'workspace/<int:workspace_id>/unified-timeline/',
+        views.unified_timeline_view,
+        name='unified-timeline'
+    ),
+    
+    # AI-Generated Clinical Summary
+    path(
+        'workspace/<int:workspace_id>/clinical-summary/',
+        views.clinical_summary_view,
+        name='clinical-summary'
+    ),
+    
+    # Regenerate AI Summary
+    path(
+        'workspace/<int:workspace_id>/regenerate-ai-summary/',
+        views.regenerate_ai_summary,
+        name='regenerate-ai-summary'
+    ),
+    
+    # Parameter Trend Analysis (e.g., HbA1c, Glucose, BP)
+    path(
+        'workspace/<int:workspace_id>/trends/<str:parameter_name>/',
+        views.parameter_trend_view,
+        name='parameter-trend'
+    ),
+    
+    # Enhanced Category View with Statistics
+    path(
+        'workspace/<int:workspace_id>/category/<str:category>/detailed/',
+        views.category_detailed_view,
+        name='category-detailed'
     ),
 ]

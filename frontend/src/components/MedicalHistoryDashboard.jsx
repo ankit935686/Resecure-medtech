@@ -3,7 +3,7 @@ import {
   Activity, Pill, AlertTriangle, Stethoscope, ClipboardList, 
   TrendingUp, Calendar, Filter, Search, Plus, CheckCircle, 
   Clock, FileText, Microscope, Shield, ChevronDown, ChevronUp,
-  Info, AlertCircle, XCircle, Edit, Trash2, Eye
+  Info, AlertCircle, XCircle, Edit, Trash2, Eye, RefreshCw
 } from 'lucide-react';
 import api from '../services/api';
 
@@ -88,6 +88,8 @@ export default function MedicalHistoryDashboard({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [expandedEntry, setExpandedEntry] = useState(null);
+  const [syncStatus, setSyncStatus] = useState(null);
+  const [syncing, setSyncing] = useState(false);
 
   // Filters
   const [filters, setFilters] = useState({
@@ -104,6 +106,7 @@ export default function MedicalHistoryDashboard({
 
   useEffect(() => {
     loadMedicalHistory();
+    loadSyncStatus();
   }, [workspaceId, userRole]);
 
   useEffect(() => {
@@ -133,6 +136,50 @@ export default function MedicalHistoryDashboard({
       setError('Failed to load medical history');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadSyncStatus = async () => {
+    if (!workspaceId) {
+      console.log('No workspace ID, skipping sync status');
+      return;
+    }
+    
+    try {
+      console.log('Loading sync status for workspace:', workspaceId);
+      const status = await api.doctor.getSyncStatus(workspaceId);
+      console.log('Sync status:', status);
+      setSyncStatus(status);
+    } catch (err) {
+      console.error('Error loading sync status:', err);
+      console.error('Error details:', err.response?.data || err.message);
+    }
+  };
+
+  const handleAutoSync = async () => {
+    setSyncing(true);
+    try {
+      console.log('Starting auto-sync for workspace:', workspaceId);
+      const result = await api.doctor.autoSyncMedicalHistory(workspaceId);
+      console.log('Auto-sync result:', result);
+      
+      const message = `Auto-sync completed!\n\n` +
+        `✓ Intake Forms Processed: ${result.results.intake_forms_processed}\n` +
+        `✓ Reports Processed: ${result.results.reports_processed}\n` +
+        `✓ New Entries Created: ${result.results.entries_created}\n` +
+        (result.results.errors.length > 0 ? `\n⚠ Errors: ${result.results.errors.join(', ')}` : '');
+      
+      alert(message);
+      
+      // Reload data
+      await loadMedicalHistory();
+      await loadSyncStatus();
+    } catch (err) {
+      console.error('Error syncing:', err);
+      console.error('Error details:', err.response?.data || err.message);
+      alert(`Failed to sync medical history:\n${err.response?.data?.error || err.message}`);
+    } finally {
+      setSyncing(false);
     }
   };
 
@@ -212,6 +259,33 @@ export default function MedicalHistoryDashboard({
 
   return (
     <div className="space-y-6">
+      {/* Sync Alert Banner */}
+      {syncStatus && syncStatus.needs_sync && userRole === 'doctor' && (
+        <div className="bg-gradient-to-r from-purple-50 to-blue-50 border border-purple-200 rounded-lg p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="bg-purple-100 p-2 rounded-lg">
+                <RefreshCw className="w-6 h-6 text-purple-600" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-gray-900">Medical History Sync Available</h3>
+                <p className="text-sm text-gray-600 mt-1">
+                  {syncStatus.intake_forms.pending} intake form{syncStatus.intake_forms.pending !== 1 ? 's' : ''} and {syncStatus.medical_reports.pending} report{syncStatus.medical_reports.pending !== 1 ? 's' : ''} ready to import
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={handleAutoSync}
+              disabled={syncing}
+              className="flex items-center gap-2 px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium shadow-sm"
+            >
+              <RefreshCw className={`w-5 h-5 ${syncing ? 'animate-spin' : ''}`} />
+              {syncing ? 'Syncing...' : 'Sync Now'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -219,16 +293,37 @@ export default function MedicalHistoryDashboard({
           <p className="text-sm text-gray-600 mt-1">
             Complete medical history from all sources
           </p>
+          {syncStatus && (
+            <p className="text-xs text-gray-500 mt-1">
+              {syncStatus.total_entries} total entries • 
+              {syncStatus.intake_forms.pending + syncStatus.medical_reports.pending > 0 && (
+                <span className="text-orange-600 font-medium ml-1">
+                  {syncStatus.intake_forms.pending + syncStatus.medical_reports.pending} pending sync
+                </span>
+              )}
+            </p>
+          )}
         </div>
         
         {userRole === 'doctor' && (
-          <button
-            onClick={() => onAddEntry?.()}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
-          >
-            <Plus className="w-5 h-5" />
-            Add Entry
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleAutoSync}
+              disabled={syncing}
+              className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Sync medical history from intake forms and reports"
+            >
+              <RefreshCw className={`w-5 h-5 ${syncing ? 'animate-spin' : ''}`} />
+              {syncing ? 'Syncing...' : 'Sync History'}
+            </button>
+            <button
+              onClick={() => onAddEntry?.()}
+              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+            >
+              <Plus className="w-5 h-5" />
+              Add Entry
+            </button>
+          </div>
         )}
       </div>
 

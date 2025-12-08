@@ -50,6 +50,7 @@ import DoctorPatientWorkspaces from './pages/doctor/DoctorPatientWorkspaces';
 import DoctorWorkspaceDetail from './pages/doctor/DoctorWorkspaceDetail';
 import IntakeFormReview from './pages/doctor/IntakeFormReview';
 import IntakeFormBuilder from './pages/doctor/IntakeFormBuilder';
+import PatientHistoryPage from './pages/doctor/PatientHistoryPage';
 
 function App() {
   return (
@@ -117,6 +118,14 @@ function App() {
             element={
               <ProtectedRoute allowedRoles={['doctor']}>
                 <DoctorWorkspaceDetail />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/doctor/workspaces/:workspaceId/history"
+            element={
+              <ProtectedRoute allowedRoles={['doctor']}>
+                <PatientHistoryPage />
               </ProtectedRoute>
             }
           />

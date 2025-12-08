@@ -314,11 +314,23 @@ export default function DoctorPatientWorkspaces() {
                     )}
 
                     {/* Actions */}
-                    <div className="flex items-center justify-between pt-4 border-t border-gray-100">
-                      <p className="text-xs text-gray-500">
-                        Updated {new Date(workspace.updated_at).toLocaleDateString()}
-                      </p>
-                      <ArrowRight className="w-5 h-5 text-blue-500" />
+                    <div className="pt-4 border-t border-gray-100 space-y-2">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigate(`/doctor/workspaces/${workspace.connection_id}/history`);
+                        }}
+                        className="w-full px-4 py-2 bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600 text-white rounded-lg font-medium transition-all flex items-center justify-center gap-2"
+                      >
+                        <FileText className="w-4 h-4" />
+                        <span>View Patient History</span>
+                      </button>
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs text-gray-500">
+                          Updated {new Date(workspace.updated_at).toLocaleDateString()}
+                        </p>
+                        <ArrowRight className="w-5 h-5 text-blue-500" />
+                      </div>
                     </div>
                   </div>
                 </div>

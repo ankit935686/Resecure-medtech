@@ -22,7 +22,7 @@ import api from '../../services/api';
 import MedicalReportUpload from '../../components/MedicalReportUpload';
 import MedicalReportsList from '../../components/MedicalReportsList';
 import MedicalReportDetail from '../../components/MedicalReportDetail';
-import MedicalHistoryDashboard from '../../components/MedicalHistoryDashboard';
+import PatientHistoryDashboard from '../../components/patientHistory/PatientHistoryDashboard';
 
 const entryIcons = {
   treatment: ClipboardList,
@@ -252,15 +252,9 @@ export default function PatientWorkspace() {
         {/* Medical History Section */}
         {activeSection === 'medical-history' && (
           <div className="space-y-6">
-            <div className="bg-white rounded-3xl shadow-xl p-6">
-              <MedicalHistoryDashboard
-                workspaceId={connectionId}
-                userRole="patient"
-                onAddEntry={() => {}}
-                onEditEntry={(entry) => {}}
-                onDeleteEntry={(entry) => {}}
-              />
-            </div>
+            <PatientHistoryDashboard
+              workspaceId={connectionId}
+            />
           </div>
         )}
 

@@ -889,3 +889,190 @@ def create_timeline_entry_on_report_upload(sender, instance, created, **kwargs):
             highlight_color='green',
             meta={'report_id': instance.id, 'report_type': instance.report_type}
         )
+
+
+# Signal handlers for Medical History auto-sync
+@receiver(post_save, sender=IntakeFormResponse)
+def auto_sync_intake_to_history(sender, instance, created, **kwargs):
+    """Auto-sync completed intake forms to medical history"""
+    from patientHistory.models import MedicalHistoryEntry
+    
+    if instance.is_complete and instance.form.workspace:
+        existing = MedicalHistoryEntry.objects.filter(
+            workspace=instance.form.workspace,
+            source='INTAKE',
+            source_reference_id=f'intake_form_{instance.form.id}'
+        ).first()
+        
+        if not existing:
+            try:
+                response_data = instance.response_data or {}
+                
+                # Extract conditions
+                for field in ['medical_history', 'current_conditions', 'chronic_diseases', 'health_conditions']:
+                    if field in response_data and response_data[field]:
+                        text = str(response_data[field])
+                        items = [i.strip() for i in text.split(',') if i.strip()]
+                        for item in items[:5]:
+                            MedicalHistoryEntry.objects.create(
+                                workspace=instance.form.workspace,
+                                patient=instance.form.patient,
+                                category='condition',
+                                title=item[:200],
+                                description=f'From intake form: {instance.form.title}',
+                                source='INTAKE',
+                                source_reference_id=f'intake_form_{instance.form.id}',
+                                status='active',
+                                verified_by_doctor=False,
+                                category_data={'form_field': field}
+                            )
+                
+                # Extract medications
+                for field in ['current_medications', 'medications']:
+                    if field in response_data and response_data[field]:
+                        text = str(response_data[field])
+                        items = [i.strip() for i in text.split(',') if i.strip()]
+                        for item in items[:5]:
+                            MedicalHistoryEntry.objects.create(
+                                workspace=instance.form.workspace,
+                                patient=instance.form.patient,
+                                category='medication',
+                                title=item[:200],
+                                description=f'From intake form: {instance.form.title}',
+                                source='INTAKE',
+                                source_reference_id=f'intake_form_{instance.form.id}',
+                                status='active',
+                                verified_by_doctor=False,
+                                category_data={'form_field': field}
+                            )
+                
+                # Extract allergies
+                for field in ['allergies', 'known_allergies']:
+                    if field in response_data and response_data[field]:
+                        text = str(response_data[field])
+                        items = [i.strip() for i in text.split(',') if i.strip()]
+                        for item in items[:5]:
+                            MedicalHistoryEntry.objects.create(
+                                workspace=instance.form.workspace,
+                                patient=instance.form.patient,
+                                category='allergy',
+                                title=item[:200],
+                                description=f'From intake form: {instance.form.title}',
+                                source='INTAKE',
+                                source_reference_id=f'intake_form_{instance.form.id}',
+                                status='active',
+                                is_critical=True,
+                                verified_by_doctor=False,
+                                category_data={'form_field': field}
+                            )
+            except Exception as e:
+                print(f"Error syncing intake form to history: {e}")
+
+
+@receiver(post_save, sender=MedicalReport)
+def auto_sync_report_to_history(sender, instance, **kwargs):
+    """Auto-sync OCR-processed medical reports to medical history"""
+    from patientHistory.models import MedicalHistoryEntry
+    
+    if instance.ocr_processed and instance.workspace and instance.status in ['ready_for_review', 'reviewed', 'ocr_complete']:
+        existing = MedicalHistoryEntry.objects.filter(
+            workspace=instance.workspace,
+            source='OCR',
+            source_reference_id=f'report_{instance.id}'
+        ).first()
+        
+        if not existing:
+            try:
+                # Create visit entry
+                MedicalHistoryEntry.objects.create(
+                    workspace=instance.workspace,
+                    patient=instance.patient,
+                    category='visit',
+                    title=instance.title[:200],
+                    description=instance.description or f'{instance.report_type} on {instance.report_date}',
+                    source='OCR',
+                    source_reference_id=f'report_{instance.id}',
+                    status='historical',
+                    recorded_date=instance.report_date,
+                    verified_by_doctor=False,
+                    category_data={'report_type': instance.report_type}
+                )
+                
+                # Extract diagnoses
+                if instance.extracted_diagnoses:
+                    for diag in instance.extracted_diagnoses[:5]:
+                        if isinstance(diag, str) and diag.strip():
+                            MedicalHistoryEntry.objects.create(
+                                workspace=instance.workspace,
+                                patient=instance.patient,
+                                category='condition',
+                                title=diag[:200],
+                                description=f'From {instance.report_type}: {instance.title}',
+                                source='OCR',
+                                source_reference_id=f'report_{instance.id}',
+                                recorded_date=instance.report_date,
+                                status='active',
+                                verified_by_doctor=False,
+                                category_data={'report_type': instance.report_type}
+                            )
+                
+                # Extract medications
+                if instance.extracted_medications:
+                    for med in instance.extracted_medications[:5]:
+                        if isinstance(med, str) and med.strip():
+                            MedicalHistoryEntry.objects.create(
+                                workspace=instance.workspace,
+                                patient=instance.patient,
+                                category='medication',
+                                title=med[:200],
+                                description=f'From {instance.report_type}: {instance.title}',
+                                source='OCR',
+                                source_reference_id=f'report_{instance.id}',
+                                recorded_date=instance.report_date,
+                                status='active',
+                                verified_by_doctor=False,
+                                category_data={'report_type': instance.report_type}
+                            )
+                
+                # Extract lab results
+                if instance.extracted_test_results:
+                    for test in instance.extracted_test_results[:5]:
+                        if isinstance(test, dict):
+                            name = test.get('test_name') or test.get('name', '')
+                            value = test.get('value', '')
+                            if name:
+                                MedicalHistoryEntry.objects.create(
+                                    workspace=instance.workspace,
+                                    patient=instance.patient,
+                                    category='lab_result',
+                                    title=name[:200],
+                                    description=f'Value: {value}',
+                                    source='OCR',
+                                    source_reference_id=f'report_{instance.id}',
+                                    recorded_date=instance.report_date,
+                                    status='historical',
+                                    verified_by_doctor=False,
+                                    category_data={'test_value': value, 'report_type': instance.report_type}
+                                )
+                
+                # Extract allergies
+                if instance.extracted_allergies:
+                    for allergy in instance.extracted_allergies[:5]:
+                        if isinstance(allergy, str) and allergy.strip():
+                            MedicalHistoryEntry.objects.create(
+                                workspace=instance.workspace,
+                                patient=instance.patient,
+                                category='allergy',
+                                title=allergy[:200],
+                                description=f'From {instance.report_type}: {instance.title}',
+                                source='OCR',
+                                source_reference_id=f'report_{instance.id}',
+                                recorded_date=instance.report_date,
+                                status='active',
+                                is_critical=True,
+                                verified_by_doctor=False,
+                                category_data={'report_type': instance.report_type}
+                            )
+                
+            except Exception as e:
+                print(f"Error syncing report to history: {e}")

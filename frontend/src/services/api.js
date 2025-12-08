@@ -501,6 +501,20 @@ const api = {
       return response.data;
     },
 
+    // Auto-sync Medical History
+    autoSyncMedicalHistory: async (workspaceId) => {
+      // POST /api/patientHistory/workspace/<workspace_id>/auto-sync/
+      await api.core.getCsrfToken();
+      const response = await apiClient.post(`/patientHistory/workspace/${workspaceId}/auto-sync/`);
+      return response.data;
+    },
+
+    getSyncStatus: async (workspaceId) => {
+      // GET /api/patientHistory/workspace/<workspace_id>/sync-status/
+      const response = await apiClient.get(`/patientHistory/workspace/${workspaceId}/sync-status/`);
+      return response.data;
+    },
+
     // Integration triggers
     importFromIntakeForm: async (formId) => {
       // POST /api/patientHistory/integration/import-intake-form/<form_id>/
